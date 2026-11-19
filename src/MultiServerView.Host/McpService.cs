@@ -144,8 +144,8 @@ public sealed class McpService : IMcpBackend, IDisposable
     public Task<IReadOnlyList<McpHost>> ListHostsAsync(string query)
     {
         var hosts = Unlocked().List()
-            .Where(s => query.Length == 0 || $"{s.Name} {s.Host} {s.Workspace} {s.Group} {string.Join(" ", s.Tags)}".Contains(query, StringComparison.OrdinalIgnoreCase))
-            .Select(s => new McpHost(s.Id, s.Name, s.Host, s.Port, s.Protocol.ToString().ToLowerInvariant(), s.Workspace, s.Group, string.Join(",", s.Tags)))
+            .Where(s => query.Length == 0 || $"{s.Name} {s.Host} {s.Workspace} {s.Group} {s.Os} {string.Join(" ", s.Tags)}".Contains(query, StringComparison.OrdinalIgnoreCase))
+            .Select(s => new McpHost(s.Id, s.Name, s.Host, s.Port, s.Protocol.ToString().ToLowerInvariant(), s.Workspace, s.Group, string.Join(",", s.Tags), s.Os, s.Notes))
             .ToList();
         return Task.FromResult<IReadOnlyList<McpHost>>(hosts);
     }
@@ -157,16 +157,27 @@ public sealed class McpService : IMcpBackend, IDisposable
         return new McpExecResult(r.StdOut, r.StdErr, r.ExitCode, r.TimedOut);
     }
 
-    public async Task<string> ReadFileAsync(string host, string path, CancellationToken ct)
+    public async Task<string> ReadFileAsync(string host, string path, int? startLine, int? maxLines, CancellationToken ct)
     {
         var (sftp, home) = await OpenSftpAsync(host, ct);
-        using (sftp) return (await sftp.ReadTextAsync(SftpSession.Normalize(home, path))).Content;
+        using (sftp)
+        {
+            var full = SftpSession.Normalize(home, path);
+            if (startLine != null || maxLines != null)
+                return await sftp.ReadTextRangeAsync(full, startLine ?? 1, maxLines ?? 200, ct);
+            return (await sftp.ReadTextAsync(full, ct)).Content;
+        }
     }
 
     public async Task WriteFileAsync(string host, string path, string content, CancellationToken ct)
     {
         var (sftp, home) = await OpenSftpAsync(host, ct);
-        using (sftp) await sftp.WriteTextAsync(SftpSession.Normalize(home, path), content, "\n", false, 0, 0, force: true);
+        using (sftp)
+        {
+            var full = SftpSession.Normalize(home, path);
+            var (lineEnding, bom) = await sftp.TryDetectFormatAsync(full, ct);
+            await sftp.WriteTextAsync(full, content, lineEnding, bom, 0, 0, force: true, ct);
+        }
     }
 
     public async Task<IReadOnlyList<McpFileEntry>> ListDirectoryAsync(string host, string path, CancellationToken ct)
@@ -174,7 +185,7 @@ public sealed class McpService : IMcpBackend, IDisposable
         var (sftp, _) = await OpenSftpAsync(host, ct);
         using (sftp)
         {
-            var listing = await sftp.ListAsync(path);
+            var listing = await sftp.ListAsync(path, ct);
             return listing.Entries.Select(e => new McpFileEntry(e.Name, e.IsDir, e.Size)).ToList();
         }
     }
