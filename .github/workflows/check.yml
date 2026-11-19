@@ -1,7 +1,8 @@
 name: Check
 
-# Only for pull requests (and manual runs): tests plus a compile of both apps. No artifacts, no installer.
-# Pushes to main do not build anything; releases are built by the Release workflow when a version tag is pushed.
+# Only for pull requests (and manual runs): tests on both systems, plus a build of the Windows and the Linux app.
+# No artifacts and no installer. Pushes to main build nothing; releases are built by the Release workflow
+# when a version tag is pushed.
 
 on:
   pull_request:
@@ -16,33 +17,62 @@ permissions:
   contents: read
 
 jobs:
-  check:
+  tests:
+    name: Tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - run: dotnet test tests/MultiServerView.Core.Tests -c Release
+
+  windows-app:
+    name: Windows app builds
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
-
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
           cache-dependency-path: ui/package-lock.json
-
-      - name: Tests (Core)
-        run: dotnet test tests/MultiServerView.Core.Tests -c Release
-
       - name: Build UI (type check + bundle)
         working-directory: ui
         run: |
           npm ci
           npm run build
+      - run: dotnet build src/MultiServerView.App -c Release
 
-      - name: Compile Windows app
-        run: dotnet build src/MultiServerView.App -c Release
-
-      - name: Compile Linux app
-        run: dotnet build src/MultiServerView.Linux -c Release
+  linux-app:
+    name: Linux app builds and starts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Build UI (type check + bundle)
+        working-directory: ui
+        run: |
+          npm ci
+          npm run build
+      - name: Publish Linux app
+        run: dotnet publish src/MultiServerView.Linux -c Release -r linux-x64 --self-contained true -o out/msv
+      - name: Self-test (no window)
+        run: ./out/msv/multiserverview --selftest "$RUNNER_TEMP/selftest"

@@ -1,6 +1,7 @@
 name: Release
 
-# Builds the installer (Inno Setup wizard) and a portable ZIP and attaches both to a GitHub Release.
+# Builds Windows (installer + portable ZIP) and Linux (.deb, AppImage, .tar.gz) in parallel and creates ONE GitHub
+# Release with all files, but only if both builds succeeded.
 # Trigger: push a version tag, e.g.  git tag v1.0.0 && git push origin v1.0.0
 
 on:
@@ -8,15 +9,16 @@ on:
     tags: ['v*']
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
-  release:
+  windows:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -66,28 +68,27 @@ jobs:
       - name: Create portable ZIP
         shell: pwsh
         run: |
-          $v = '${{ github.ref_name }}'.TrimStart('v')
+          $v = '${{ steps.ver.outputs.v }}'
           New-Item -ItemType Directory -Force dist | Out-Null
           Compress-Archive -Path publish\* -DestinationPath "dist\MultiServerView-$v-portable-win-x64.zip"
 
       - name: Build installer
         shell: pwsh
         run: |
-          $v = '${{ github.ref_name }}'.TrimStart('v')
+          $v = '${{ steps.ver.outputs.v }}'
           choco install innosetup -y --no-progress
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$v" "/DSourceDir=..\publish" installer\MultiServerView.iss
 
-      - name: Create GitHub Release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create '${{ github.ref_name }}' dist\* --title '${{ github.ref_name }}' --generate-notes --notes 'Windows SmartScreen may warn on first start because the files are not code-signed yet (More info, then Run anyway). The installer needs no admin rights; the ZIP is portable.'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-files
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 3
 
   linux:
-    # Linux packages are attached to the release the Windows job created.
-    needs: release
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -101,6 +102,13 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
 
+      - name: Version from tag
+        id: ver
+        run: echo "v=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Tests (Core, on Linux)
+        run: dotnet test tests/MultiServerView.Core.Tests -c Release
+
       - name: Build UI
         working-directory: ui
         run: |
@@ -108,22 +116,41 @@ jobs:
           npm run build
 
       - name: Publish app (linux-x64, self-contained)
-        run: |
-          V="${GITHUB_REF_NAME#v}"
-          dotnet publish src/MultiServerView.Linux -c Release -r linux-x64 --self-contained true -p:Version=$V -o out/msv
-
-      - name: Tests (Core, on Linux)
-        run: dotnet test tests/MultiServerView.Core.Tests -c Release
+        run: dotnet publish src/MultiServerView.Linux -c Release -r linux-x64 --self-contained true -p:Version=${{ steps.ver.outputs.v }} -o out/msv
 
       - name: Self-test (no window)
         run: ./out/msv/multiserverview --selftest "$RUNNER_TEMP/selftest"
 
       - name: Tools for the AppImage
         run: sudo apt-get install -y desktop-file-utils
-      - name: Build AppImage, .deb and .tar.gz
-        run: bash packaging/linux/build-packages.sh out/msv "${GITHUB_REF_NAME#v}" dist
 
-      - name: Attach to the release
+      - name: Build AppImage, .deb and .tar.gz
+        run: bash packaging/linux/build-packages.sh out/msv "${{ steps.ver.outputs.v }}" dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-files
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 3
+
+  release:
+    # Only runs when both builds succeeded, so a release is never half finished.
+    needs: [windows, linux]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.ref_name }}" dist/* --clobber
+          GH_REPO: ${{ github.repository }}
+        run: |
+          ls -la dist
+          gh release create '${{ github.ref_name }}' dist/* --title '${{ github.ref_name }}' --generate-notes \
+            --notes 'Windows: the installer needs no admin rights, the ZIP is portable. SmartScreen may warn on first start because the files are not code-signed yet (More info, then Run anyway). Linux: .deb (easiest, installs the needed libraries), .AppImage or .tar.gz, see the README.'
