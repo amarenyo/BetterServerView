@@ -71,16 +71,31 @@ export function McpPage({ toast }: { toast: (msg: string, kind?: 'ok' | 'error')
   const [client, setClient] = useState('claude-code');
   const [copied, setCopied] = useState('');
   const [cfg, setCfg] = useState<McpConfigStatus | null>(null);
+  const [allCfg, setAllCfg] = useState<Record<string, McpConfigStatus>>({});
+  const [vscodeFolder, setVscodeFolder] = useState('');
+  const [portText, setPortText] = useState('');
   const [cfgBusy, setCfgBusy] = useState(false);
   const [cfgNote, setCfgNote] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   const timer = useRef<number | undefined>(undefined);
 
   const loadStatus = useCallback(() => void api.mcpStatus().then(setStatus).catch(() => undefined), []);
+  const loadAllCfg = useCallback(
+    () =>
+      void api
+        .mcpConfigureAll()
+        .then(setAllCfg)
+        .catch(() => setAllCfg({})),
+    [],
+  );
 
   useEffect(() => {
     void api.settingsGet().then(setHost).catch((e: Error) => toast(e.message, 'error'));
     loadStatus();
   }, [toast, loadStatus]);
+
+  useEffect(() => {
+    if (host) setPortText(String(host.mcpPort));
+  }, [host?.mcpPort]);
 
   useEffect(() => () => window.clearTimeout(timer.current), []);
 
@@ -88,12 +103,20 @@ export function McpPage({ toast }: { toast: (msg: string, kind?: 'ok' | 'error')
 
   useEffect(() => {
     if (!isNative || !host?.mcpEnabled || !host.mcpToken) {
+      setAllCfg({});
+      return;
+    }
+    loadAllCfg();
+  }, [host?.mcpEnabled, host?.mcpPort, host?.mcpToken, loadAllCfg]);
+
+  useEffect(() => {
+    if (!isNative || !host?.mcpEnabled || !host.mcpToken || (client === 'vscode' && !vscodeFolder)) {
       setCfg(null);
       return;
     }
     let cancelled = false;
     void api
-      .mcpConfigure(client, 'status')
+      .mcpConfigure(client, 'status', client === 'vscode' ? vscodeFolder : undefined)
       .then((r) => {
         if (!cancelled) setCfg(r);
       })
@@ -103,7 +126,7 @@ export function McpPage({ toast }: { toast: (msg: string, kind?: 'ok' | 'error')
     return () => {
       cancelled = true;
     };
-  }, [client, host?.mcpEnabled, host?.mcpPort, host?.mcpToken]);
+  }, [client, vscodeFolder, host?.mcpEnabled, host?.mcpPort, host?.mcpToken]);
 
   const saveSettings = (next: HostSettings) => {
     api
@@ -139,13 +162,27 @@ export function McpPage({ toast }: { toast: (msg: string, kind?: 'ok' | 'error')
   const current = CLIENTS.find((c) => c.id === client) ?? CLIENTS[0];
   const snippet = host ? current.snippet(url, host.mcpToken) : '';
   const where = cfg?.supported && cfg.path ? cfg.path : current.where;
+  const outdatedClients = CLIENTS.filter((c) => allCfg[c.id]?.configured && !allCfg[c.id]?.upToDate).map((c) => c.label);
+
+  const pickVscodeFolder = async () => {
+    try {
+      const r = await api.pickFolder('Select VS Code workspace folder');
+      if (r.path) {
+        setVscodeFolder(r.path);
+        setCfgNote(null);
+      }
+    } catch (e) {
+      toast((e as Error).message, 'error');
+    }
+  };
 
   const configure = async (action: 'add' | 'remove') => {
     setCfgBusy(true);
     setCfgNote(null);
     try {
-      const r = await api.mcpConfigure(client, action);
+      const r = await api.mcpConfigure(client, action, client === 'vscode' ? vscodeFolder : undefined);
       setCfg(r);
+      loadAllCfg();
       const bak = r.backupPath ? ' (backup saved as .bak)' : '';
       const hint =
         client === 'antigravity'
@@ -222,7 +259,19 @@ export function McpPage({ toast }: { toast: (msg: string, kind?: 'ok' | 'error')
                     <div className="set-title">Port</div>
                   </div>
                   <div className="set-control">
-                    <input type="number" min={1024} max={65535} value={host.mcpPort} onChange={(e) => update({ mcpPort: Number(e.target.value) })} />
+                    <input
+                      type="number"
+                      min={1024}
+                      max={65535}
+                      value={portText}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setPortText(v);
+                        const n = Number(v);
+                        if (v.trim() !== '' && Number.isInteger(n) && n >= 1024 && n <= 65535) update({ mcpPort: n });
+                      }}
+                      onBlur={() => setPortText(String(host.mcpPort))}
+                    />
                   </div>
                 </div>
                 <div className="set-row">
@@ -247,12 +296,39 @@ export function McpPage({ toast }: { toast: (msg: string, kind?: 'ok' | 'error')
                 <p className="muted small">Pick your tool, copy the text and paste it where it says. Formats can change between versions of the tools, so check their documentation if something does not work.</p>
               </header>
               <div className="mode-switch wrap" style={{ margin: '4px 0 10px' }}>
-                {CLIENTS.map((c) => (
-                  <button type="button" key={c.id} className={client === c.id ? 'on' : ''} onClick={() => setClient(c.id)}>
-                    {c.label}
-                  </button>
-                ))}
+                {CLIENTS.map((c) => {
+                  const outdated = Boolean(allCfg[c.id]?.configured && !allCfg[c.id]?.upToDate);
+                  return (
+                    <button
+                      type="button"
+                      key={c.id}
+                      className={client === c.id ? 'on' : ''}
+                      title={outdated ? 'Saved config uses a different port or token' : undefined}
+                      onClick={() => setClient(c.id)}
+                    >
+                      {c.label}
+                      {outdated && (
+                        <span
+                          style={{
+                            display: 'inline-block',
+                            width: 6,
+                            height: 6,
+                            borderRadius: '50%',
+                            background: 'var(--warn)',
+                            marginLeft: 6,
+                            verticalAlign: 'middle',
+                          }}
+                        />
+                      )}
+                    </button>
+                  );
+                })}
               </div>
+              {outdatedClients.length > 0 && (
+                <div className="notice small" style={{ marginBottom: 10 }}>
+                  Outdated saved config: {outdatedClients.join(', ')} — open the tab and click <strong>Update config</strong>.
+                </div>
+              )}
               <p className="small">{current.intro}</p>
               {where && (
                 <p className="muted small">
@@ -264,6 +340,11 @@ export function McpPage({ toast }: { toast: (msg: string, kind?: 'ok' | 'error')
                 <button className="primary" onClick={() => void copy(snippet, 'snippet')}>
                   {copied === 'snippet' ? <IconCheck size={14} /> : <IconCopy size={14} />} {copied === 'snippet' ? 'Copied' : 'Copy'}
                 </button>
+                {isNative && client === 'vscode' && (
+                  <button type="button" disabled={cfgBusy} onClick={() => void pickVscodeFolder()}>
+                    {vscodeFolder ? 'Change folder…' : 'Choose workspace folder…'}
+                  </button>
+                )}
                 {isNative && cfg?.supported && (
                   <>
                     {!cfg.configured && (
