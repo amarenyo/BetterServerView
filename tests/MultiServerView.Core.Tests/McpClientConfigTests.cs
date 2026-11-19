@@ -183,4 +183,12 @@ public sealed class McpClientConfigTests : IDisposable
         Assert.NotNull(doc["mcpServers"]!["keep"]);
         Assert.False(doc["mcpServers"]!.AsObject().ContainsKey("multiserverview"));
     }
+
+    [Fact]
+    public void Config_file_with_the_token_is_only_readable_by_its_owner_on_unix()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var result = McpClientConfig.Add("cursor", "http://127.0.0.1:7676/mcp", "token-token-token-1234", _home, _appData);
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(result.Path));
+    }
 }

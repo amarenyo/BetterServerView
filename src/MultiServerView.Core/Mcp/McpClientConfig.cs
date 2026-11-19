@@ -169,6 +169,12 @@ public static class McpClientConfig
     private static void WriteAtomic(string path, JsonObject root)
     {
         var tmp = path + ".tmp";
+        // The file contains the MCP token: on Linux/macOS only the owner may read it (set before the token is written).
+        if (!OperatingSystem.IsWindows())
+        {
+            File.WriteAllText(tmp, "");
+            File.SetUnixFileMode(tmp, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
         File.WriteAllText(tmp, root.ToJsonString(JsonOut) + "\n", Utf8NoBom);
         File.Move(tmp, path, overwrite: true);
     }
