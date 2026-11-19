@@ -794,7 +794,11 @@ internal sealed class Bridge : IDisposable
         _ = Task.Run(async () =>
         {
             var os = await session.DetectOsAsync();
-            if (os.Length > 0) _vault.SetOs(server.Id, os);
+            if (os.Length > 0)
+            {
+                _vault.SetOs(server.Id, os);
+                _emit(new { @event = "vault.changed" }); // the host list shows the new logo right away
+            }
         });
     }
 
