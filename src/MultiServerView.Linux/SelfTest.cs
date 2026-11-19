@@ -26,6 +26,8 @@ internal static class SelfTest
 
     public static async Task<int> RunAsync(string dir)
     {
+        foreach (var leftover in new[] { "source-folder", "local", "back" })
+            if (Directory.Exists(Path.Combine(dir, leftover))) Directory.Delete(Path.Combine(dir, leftover), true);
         Directory.CreateDirectory(dir);
         var data = Path.Combine(dir, "data");
         if (Directory.Exists(data)) Directory.Delete(data, true);
