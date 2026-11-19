@@ -1,6 +1,6 @@
 # MultiServerView
 
-**One window for all your servers.** SSH, SFTP, RDP and VNC in tabs, a fast host switcher, workspaces to keep hundreds of hosts tidy, and an end-to-end encrypted vault that you can keep on your PC, in a folder, on GitHub or in Supabase. For Windows, open source (MIT).
+**One window for all your servers.** SSH, SFTP, RDP and VNC in tabs, a fast host switcher, workspaces to keep hundreds of hosts tidy, and an end-to-end encrypted vault that you can keep on your PC, in a folder, on GitHub or in Supabase. For Windows (and a Linux test build). Free to use, source-available, not open source.
 
 <table>
   <tr>
@@ -202,7 +202,7 @@ An early Linux build lives on the `linux` branch (Photino/WebKitGTK window, same
 
 ## License
 
-[MIT](LICENSE). Contributions are welcome: open an issue or a pull request.
+[MultiServerView Source-Available License](LICENSE): free to use, but no redistribution or forks of your own. Contributions are welcome: open an issue or a pull request.
 
 ## Inspiration and vibe coding
 
