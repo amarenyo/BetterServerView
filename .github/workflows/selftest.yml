@@ -1,12 +1,10 @@
-name: Build (Windows)
+name: Self-test (Windows, manual)
 
-# Builds the real Windows app, runs the tests and stores a ready-made, portable version
-# (no installation, .NET included) as a download under "Actions -> Artifacts".
+# Manual only (Actions -> Run workflow): builds the real Windows app and starts it on a real Windows runner
+# (window, WebView2, vault, DPAPI, RDP control, real SSH server) and stores screenshots + report.
+# Normal pull requests only run the lighter "Check" workflow; releases build everything again on tags.
 
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 jobs:
