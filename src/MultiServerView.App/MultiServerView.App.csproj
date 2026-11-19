@@ -9,7 +9,6 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <AssemblyName>MultiServerView</AssemblyName>
-    <Version>1.3.0</Version>
     <RootNamespace>MultiServerView.App</RootNamespace>
   </PropertyGroup>
 
@@ -17,6 +16,7 @@
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2792.45" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
     <ProjectReference Include="..\MultiServerView.Core\MultiServerView.Core.csproj" />
+    <ProjectReference Include="..\MultiServerView.Host\MultiServerView.Host.csproj" />
   </ItemGroup>
 
   <!-- Das gebaute UI (ui/ -> wwwroot) wird mit in den Output kopiert. -->

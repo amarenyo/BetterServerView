@@ -6,13 +6,13 @@ using MultiServerView.Core.Mcp;
 using MultiServerView.Core.Sftp;
 using MultiServerView.Core.Ssh;
 
-namespace MultiServerView.App;
+namespace MultiServerView.Host;
 
 /// <summary>
 /// Local MCP server for AI tools (Claude Code, Claude Desktop, ...): listens on 127.0.0.1 only and needs the bearer token
 /// shown in the settings. The tools work on the hosts of the unlocked vault.
 /// </summary>
-internal sealed class McpService : IMcpBackend, IDisposable
+public sealed class McpService : IMcpBackend, IDisposable
 {
     private readonly VaultStore _vault;
     private readonly Func<string, int, string, HostKeyTrust> _check;

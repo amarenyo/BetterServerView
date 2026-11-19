@@ -4,6 +4,7 @@ using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using MultiServerView.App.Rdp;
 using MultiServerView.Core;
+using MultiServerView.Host;
 using MultiServerView.Core.Sync;
 
 namespace MultiServerView.App;
@@ -15,7 +16,7 @@ public sealed partial class MainForm : Form
 
     private readonly WebView2 _web = new() { Dock = DockStyle.Fill, DefaultBackgroundColor = Background };
     private readonly Bridge _bridge;
-    private readonly RdpManager _rdp;
+    private RdpManager _rdp = null!;
 
     private readonly string? _smokeDir;
 
@@ -35,17 +36,13 @@ public sealed partial class MainForm : Form
         var roaming = !string.IsNullOrWhiteSpace(dataOverride)
             ? dataOverride
             : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MultiServerView");
-        var vault = new VaultStore(Path.Combine(roaming, "vault.msv"));
-        var settings = new SyncSettingsStore(Path.Combine(roaming, "sync.json"), new DpapiProtector());
-        var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        var source = new SourceService(vault, settings, cfg => new SupabaseClient(http, cfg.Url, cfg.AnonKey));
-
-        var appSettings = new AppSettingsStore(Path.Combine(roaming, "settings.json"));
-
         Controls.Add(_web);
-        _rdp = new RdpManager(this, Emit, () => appSettings.Current);
-        var history = new HistoryStore(Path.Combine(roaming, "history.json"));
-        _bridge = new Bridge(vault, source, history, appSettings, _rdp, Emit, PickSavePath, PickFolder, WindowCommand);
+        var platform = new WindowsPlatform(PickSavePath, PickFolder, WindowCommand);
+        _bridge = HostBootstrap.Create(roaming, platform, Emit, settings =>
+        {
+            _rdp = new RdpManager(this, Emit, settings);
+            return _rdp;
+        });
     }
 
     /// <summary>Shows the "Save as" dialog (runs on the UI thread). null = cancelled.</summary>

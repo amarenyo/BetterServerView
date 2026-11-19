@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Drawing;
 using System.Text.Json;
 using MultiServerView.Core;
 using MultiServerView.Core.Update;
@@ -11,25 +12,14 @@ using MultiServerView.Core.Ssh;
 using MultiServerView.Core.Sync;
 using MultiServerView.Core.Vnc;
 
-namespace MultiServerView.App;
-
-/// <summary>What the bridge needs from the RDP hosting (WinForms, UI thread).</summary>
-internal interface IRdpController
-{
-    void Open(string sessionId, ServerEntry server, Rectangle bounds);
-    void Layout(string sessionId, Rectangle bounds, bool visible);
-    void Close(string sessionId);
-
-    /// <summary>true = hide all RDP windows (a UI overlay is on top), false = show them again.</summary>
-    void SetSuspended(bool suspended);
-}
+namespace MultiServerView.Host;
 
 /// <summary>
 /// Receives messages from the UI ({ id, method, params }) and answers with { id, result } or { id, error }.
 /// In addition the bridge sends events to the UI ({ event, ... }): ssh.data, ssh.closed, rdp.status, sync.status, vault.changed.
 /// The method names are identical to ui/src/bridge.ts.
 /// </summary>
-internal sealed class Bridge : IDisposable
+public sealed class Bridge : IDisposable
 {
     private readonly VaultStore _vault;
     private readonly SourceService _source;
@@ -38,9 +28,7 @@ internal sealed class Bridge : IDisposable
     private readonly Action<object> _emit;
     private readonly HistoryStore _history;
     private readonly AppSettingsStore _settings;
-    private readonly Func<string, Task<string?>> _pickSavePath;
-    private readonly Func<string, Task<string?>> _pickFolder;
-    private readonly Func<string, bool> _window;
+    private readonly IHostPlatform _platform;
     private readonly ConcurrentDictionary<string, JumpTunnel> _tunnels = new();
     private readonly ConcurrentDictionary<string, SshPump> _ssh = new();
     private readonly ConcurrentDictionary<string, SftpSession> _sftp = new();
@@ -50,15 +38,12 @@ internal sealed class Bridge : IDisposable
     private readonly WebSocketTcpProxy _vncProxy = new();
     private readonly McpService _mcp;
 
-    public Bridge(VaultStore vault, SourceService source, HistoryStore history, AppSettingsStore settings, IRdpController rdp, Action<object> emit,
-        Func<string, Task<string?>> pickSavePath, Func<string, Task<string?>> pickFolder, Func<string, bool> window)
+    public Bridge(VaultStore vault, SourceService source, HistoryStore history, AppSettingsStore settings, IRdpController rdp, Action<object> emit, IHostPlatform platform)
     {
-        _pickFolder = pickFolder;
-        _window = window;
+        _platform = platform;
         _vault = vault;
         _history = history;
         _settings = settings;
-        _pickSavePath = pickSavePath;
         _forwards.StatusChanged += (id, running, error) =>
             emit(new { @event = "forward.status", ruleId = id, running, error });
         _source = source;
@@ -300,9 +285,9 @@ internal sealed class Bridge : IDisposable
                 return null;
             case "rdp.external":
             {
-                // Fallback: normal Windows window (mstsc). You enter the credentials there yourself.
+                // Fallback: the RDP client of the system (mstsc, xfreerdp, ...). You enter the credentials there yourself.
                 var server = _vault.FindResolved(Str(p, "serverId")) ?? throw new KeyNotFoundException("Server not found.");
-                Process.Start(new ProcessStartInfo("mstsc.exe", $"/v:{server.Host}:{server.Port}") { UseShellExecute = true });
+                _platform.OpenExternalRdp(server);
                 return null;
             }
 
@@ -310,41 +295,23 @@ internal sealed class Bridge : IDisposable
             {
                 var current = AppVersion;
                 var info = await UpdateChecker.CheckAsync(_http, current);
-                return new { current, available = info != null, version = info?.Version ?? "", notes = info?.Notes ?? "", pageUrl = info?.PageUrl ?? "", canInstall = info?.SetupUrl != null && IsInstalled() };
+                return new { current, available = info != null, version = info?.Version ?? "", notes = info?.Notes ?? "", pageUrl = info?.PageUrl ?? "", canInstall = info?.SetupUrl != null && _platform.CanSelfUpdate };
             }
             case "update.install":
             {
                 var info = await UpdateChecker.CheckAsync(_http, AppVersion);
                 if (info?.SetupUrl == null || !UpdateChecker.IsGitHubUrl(info.SetupUrl)) throw new InvalidOperationException("No installer found for the new version. Download it from the releases page.");
-                if (!IsInstalled()) throw new InvalidOperationException("This is the portable version. Download the new ZIP from the releases page.");
-                var file = Path.Combine(Path.GetTempPath(), "MultiServerView-Setup-" + info.Version + ".exe");
-                using (var response = await _http.GetAsync(info.SetupUrl, HttpCompletionOption.ResponseHeadersRead))
-                {
-                    response.EnsureSuccessStatusCode();
-                    await using var fs = File.Create(file);
-                    await response.Content.CopyToAsync(fs);
-                }
-                // Inno Setup: silent, closes this app, starts the new version when done.
-                Process.Start(new ProcessStartInfo(file, "/SILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS /NOCANCEL") { UseShellExecute = true });
-                _window("close");
+                if (!_platform.CanSelfUpdate) throw new InvalidOperationException("This copy cannot update itself. Download the new version from the releases page.");
+                await _platform.InstallUpdateAsync(info.SetupUrl, info.Version);
                 return null;
             }
             case "teamviewer.open":
             {
                 // Hands the ID and password to the installed TeamViewer client (no embedded session).
                 var server = _vault.FindResolved(Str(p, "serverId")) ?? throw new KeyNotFoundException("Server not found.");
-                var exe = FindTeamViewer() ?? throw new InvalidOperationException("TeamViewer is not installed on this PC (https://www.teamviewer.com).");
                 var id = new string(server.Host.Where(char.IsDigit).ToArray());
                 if (id.Length < 8) throw new ArgumentException("Please enter the TeamViewer ID of the partner (digits only).");
-                var info = new ProcessStartInfo(exe) { UseShellExecute = false };
-                info.ArgumentList.Add("-i");
-                info.ArgumentList.Add(id);
-                if (server.Password.Length > 0)
-                {
-                    info.ArgumentList.Add("--Password");
-                    info.ArgumentList.Add(server.Password);
-                }
-                Process.Start(info);
+                _platform.StartTeamViewer(id, server.Password);
                 return null;
             }
 
@@ -538,22 +505,14 @@ internal sealed class Bridge : IDisposable
                 LocalFs.Rename(Str(p, "from"), Str(p, "to"));
                 return null;
             case "local.delete":
-            {
-                // Recycle bin, so a wrong click can be undone in Explorer.
-                foreach (var path in Strings(p, "paths"))
-                {
-                    if (Directory.Exists(path))
-                        Microsoft.VisualBasic.FileIO.FileSystem.DeleteDirectory(path, Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs, Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
-                    else
-                        Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(path, Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs, Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
-                }
+                // Recycle bin / trash, so a wrong click can be undone.
+                _platform.MoveToTrash(Strings(p, "paths"));
                 return null;
-            }
             case "local.open":
-                OpenWithShell(Str(p, "path"));
+                _platform.OpenFile(Str(p, "path"));
                 return null;
             case "local.reveal":
-                Process.Start(new ProcessStartInfo("explorer.exe") { ArgumentList = { "/select,", Str(p, "path") }, UseShellExecute = false });
+                _platform.RevealInFileManager(Str(p, "path"));
                 return null;
             case "local.browse":
                 return LocalFs.Browse(Opt(p, "path").Length == 0 ? LocalFs.Home() : Opt(p, "path"));
@@ -572,6 +531,8 @@ internal sealed class Bridge : IDisposable
                 _mcp.Apply(saved);
                 return saved;
             }
+            case "app.info":
+                return new { platform = _platform.Name, customTitleBar = _platform.CustomTitleBar, canSelfUpdate = _platform.CanSelfUpdate };
             case "mcp.status":
                 return new { running = _mcp.Running, error = _mcp.Error };
             case "vault.changePassword":
@@ -593,7 +554,7 @@ internal sealed class Bridge : IDisposable
             }
             case "vault.export":
             {
-                var path = await _pickSavePath($"MultiServerView-Backup-{DateTime.Now:yyyy-MM-dd}.msv");
+                var path = await _platform.PickSavePathAsync($"MultiServerView-Backup-{DateTime.Now:yyyy-MM-dd}.msv");
                 if (path == null) return new { saved = false };
                 _vault.ExportTo(path);
                 return new { saved = true, path };
@@ -601,14 +562,19 @@ internal sealed class Bridge : IDisposable
             case "vault.info":
                 return new { path = _vault.FilePath, version = typeof(Bridge).Assembly.GetName().Version?.ToString(3) ?? "" };
             case "vault.reveal":
-                Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{_vault.FilePath}\"") { UseShellExecute = true });
+                _platform.RevealInFileManager(_vault.FilePath);
                 return null;
 
             // ---------------------------------------------------------- Further imports
             case "import.sshconfig":
                 return ImportResult(SshConfigImporter.Parse(Str(p, "text")), Opt(p, "workspace"));
             case "import.putty":
-                return ImportResult(Opt(p, "text").Length > 0 ? PuttyImporter.ParseReg(Str(p, "text")) : PuttyImporter.FromSessions(ReadPuttyRegistry()), Opt(p, "workspace"));
+            {
+                if (Opt(p, "text").Length > 0) return ImportResult(PuttyImporter.ParseReg(Str(p, "text")), Opt(p, "workspace"));
+                var sessions = _platform.ReadPuttySessions() ?? throw new InvalidOperationException("Reading PuTTY sessions directly is only possible on Windows. Export them as a .reg file instead.");
+                if (sessions.Count == 0) throw new InvalidOperationException("No saved PuTTY sessions were found on this PC.");
+                return ImportResult(PuttyImporter.FromSessions(sessions), Opt(p, "workspace"));
+            }
             case "import.csv":
                 return ImportResult(CsvImporter.Parse(Str(p, "text")), Opt(p, "workspace"));
 
@@ -743,11 +709,11 @@ internal sealed class Bridge : IDisposable
             case "source.signUp":
                 return new { signedIn = await _source.SignUpAsync(ReadSourceConfig(p)) };
             case "source.pickFolder":
-                return new { path = await _pickFolder("Choose the folder for your vault (e.g. a folder in OneDrive or iCloud Drive)") };
+                return new { path = await _platform.PickFolderAsync("Choose the folder for your vault (e.g. a folder in OneDrive or iCloud Drive)") };
             case "dialog.pickFolder":
-                return new { path = await _pickFolder(Opt(p, "title").Length > 0 ? Opt(p, "title") : "Choose folder") };
+                return new { path = await _platform.PickFolderAsync(Opt(p, "title").Length > 0 ? Opt(p, "title") : "Choose folder") };
             case "window.command":
-                return new { maximized = _window(Str(p, "command")) };
+                return new { maximized = _platform.WindowCommand(Str(p, "command")) };
 
             default:
                 throw new InvalidOperationException($"Unknown method: {method}");
@@ -915,41 +881,9 @@ internal sealed class Bridge : IDisposable
         return new { imported, skipped = result.Skipped, duplicates = result.Servers.Count - fresh.Count, keysImported, keysSkipped, passwordsFailed };
     }
 
-    /// <summary>Reads saved PuTTY sessions directly from the Windows registry.</summary>
-    private static IEnumerable<PuttySession> ReadPuttyRegistry()
-    {
-        using var root = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\SimonTatham\PuTTY\Sessions");
-        if (root == null) throw new InvalidOperationException("No saved PuTTY sessions were found on this PC.");
-        foreach (var name in root.GetSubKeyNames())
-        {
-            using var k = root.OpenSubKey(name);
-            if (k == null) continue;
-            yield return new PuttySession(
-                Uri.UnescapeDataString(name),
-                k.GetValue("HostName") as string ?? "",
-                k.GetValue("PortNumber") is int port ? port : 22,
-                k.GetValue("Protocol") as string ?? "ssh",
-                k.GetValue("UserName") as string ?? "");
-        }
-    }
-
     private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromMinutes(5) };
 
     private static string AppVersion => typeof(Bridge).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
-
-    /// <summary>Installed by the setup wizard (the uninstaller sits next to the exe) - otherwise it is the portable ZIP.</summary>
-    private static bool IsInstalled() => File.Exists(Path.Combine(AppContext.BaseDirectory, "unins000.exe"));
-
-    private static string? FindTeamViewer()
-    {
-        foreach (var root in new[] { Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles) })
-        {
-            if (string.IsNullOrEmpty(root)) continue;
-            var exe = Path.Combine(root, "TeamViewer", "TeamViewer.exe");
-            if (File.Exists(exe)) return exe;
-        }
-        return null;
-    }
 
     private SftpSession Sftp(JsonElement p) =>
         _sftp.TryGetValue(Str(p, "sessionId"), out var s) ? s : throw new InvalidOperationException("The SFTP connection is not open.");
@@ -1026,20 +960,7 @@ internal sealed class Bridge : IDisposable
         edit.Watcher.Renamed += (_, e) => Changed(e.Name ?? "");
         _external.AddOrUpdate(sessionId, _ => new List<ExternalEdit> { edit }, (_, list) => { lock (list) list.Add(edit); return list; });
 
-        OpenWithShell(local);
-    }
-
-    /// <summary>Opens a file with the program Windows associates with it (or asks "Open with…" if there is none).</summary>
-    private static void OpenWithShell(string path)
-    {
-        try
-        {
-            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
-        }
-        catch (System.ComponentModel.Win32Exception)
-        {
-            Process.Start(new ProcessStartInfo("rundll32.exe") { ArgumentList = { "shell32.dll,OpenAs_RunDLL", path }, UseShellExecute = false });
-        }
+        _platform.OpenFile(local);
     }
 
     private void CloseSftp(string sessionId)

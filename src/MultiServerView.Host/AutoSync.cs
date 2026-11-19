@@ -1,7 +1,7 @@
 using MultiServerView.Core;
 using MultiServerView.Core.Sync;
 
-namespace MultiServerView.App;
+namespace MultiServerView.Host;
 
 /// <summary>
 /// Keeps the vault and its source (folder, GitHub, Supabase) in step: saves changes there 2 seconds after the last change,
@@ -9,7 +9,7 @@ namespace MultiServerView.App;
 /// The UI learns about it through the event "source.status"; "vault.changed" means that newer data was taken over,
 /// "vault.replaced" that the vault was replaced and locked (master password changed on another device).
 /// </summary>
-internal sealed class AutoSync : IDisposable
+public sealed class AutoSync : IDisposable
 {
     private readonly VaultStore _store;
     private readonly SourceService _source;

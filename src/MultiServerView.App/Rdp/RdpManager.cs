@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using MultiServerView.Core;
+using MultiServerView.Host;
 
 namespace MultiServerView.App.Rdp;
 
