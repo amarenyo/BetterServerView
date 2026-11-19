@@ -67,6 +67,7 @@ const SHORTCUTS: [string, string][] = [
   ['Ctrl + Shift + K', 'Quick connect (everywhere, also inside a terminal)'],
   ['Ctrl + Tab / Ctrl + Shift + Tab', 'Next / previous tab'],
   ['Ctrl + 1 … 9', 'Jump to a tab (1 = Hosts)'],
+  ['Ctrl + Shift + PageUp / PageDown', 'Move the current tab left / right (or drag the tab)'],
   ['Ctrl + Shift + W', 'Close tab (middle-click works too)'],
   ['Ctrl + Shift + N', 'New host'],
   ['Ctrl + Shift + D', 'Second session to the same host'],

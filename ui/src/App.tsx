@@ -269,6 +269,62 @@ export function App() {
     [tabs, active],
   );
 
+  // ---------------------------------------------------------------- Rearranging tabs (drag them, or Ctrl+Shift+PageUp/PageDown)
+  const [dragTab, setDragTab] = useState<string | null>(null);
+  const [dropMark, setDropMark] = useState<{ id: string; after: boolean } | null>(null);
+
+  const moveTab = useCallback((id: string, targetId: string, after: boolean) => {
+    setTabs((prev) => {
+      const item = prev.find((t) => t.id === id);
+      if (!item || id === targetId) return prev;
+      const rest = prev.filter((t) => t.id !== id);
+      const to = rest.findIndex((t) => t.id === targetId);
+      if (to < 0) return prev;
+      rest.splice(after ? to + 1 : to, 0, item);
+      return rest;
+    });
+  }, []);
+
+  const shiftTab = useCallback((id: string, dir: -1 | 1) => {
+    setTabs((prev) => {
+      const i = prev.findIndex((t) => t.id === id);
+      const j = i + dir;
+      if (i < 0 || j < 0 || j >= prev.length) return prev;
+      const next = [...prev];
+      [next[i], next[j]] = [next[j], next[i]];
+      return next;
+    });
+  }, []);
+
+  /** Props that make a tab draggable and a place to drop another tab on. */
+  const tabDrag = (id: string) => ({
+    draggable: true,
+    onDragStart: (e: React.DragEvent) => {
+      setDragTab(id);
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', id);
+    },
+    onDragOver: (e: React.DragEvent) => {
+      if (!dragTab || dragTab === id) return;
+      e.preventDefault();
+      const r = e.currentTarget.getBoundingClientRect();
+      const after = e.clientX > r.left + r.width / 2;
+      setDropMark((m) => (m?.id === id && m.after === after ? m : { id, after }));
+    },
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      if (dragTab && dropMark) moveTab(dragTab, dropMark.id, dropMark.after);
+      setDragTab(null);
+      setDropMark(null);
+    },
+    onDragEnd: () => {
+      setDragTab(null);
+      setDropMark(null);
+    },
+  });
+  const tabMark = (id: string) =>
+    (dragTab === id ? ' dragging' : '') + (dropMark?.id === id ? (dropMark.after ? ' drop-after' : ' drop-before') : '');
+
   const setStatus = useCallback((id: string, s: SessionStatus) => setStatuses((prev) => (prev[id] === s ? prev : { ...prev, [id]: s })), []);
 
   // ---------------------------------------------------------------- Panel
@@ -297,6 +353,8 @@ export function App() {
       else if (/^[1-9]$/.test(e.key) && !e.shiftKey) {
         const n = Number(e.key);
         setActive(n === 1 ? HOME : (tabs[n - 2]?.id ?? active));
+      } else if (e.shiftKey && (e.key === 'PageUp' || e.key === 'PageDown')) {
+        if (active !== HOME) shiftTab(active, e.key === 'PageUp' ? -1 : 1);
       } else if (key === 'w' && e.shiftKey) {
         if (active !== HOME) closeTab(active);
       } else if (key === 'n' && e.shiftKey) newHost();
@@ -311,7 +369,7 @@ export function App() {
     }
     window.addEventListener('keydown', onKey, true); // capture: before xterm
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [phase, tabs, active, cycle, closeTab, duplicate, newHost]);
+  }, [phase, tabs, active, cycle, closeTab, duplicate, newHost, shiftTab]);
 
   // Auto-lock after inactivity (setting "Security")
   const lastActivity = useRef(Date.now());
@@ -593,7 +651,8 @@ export function App() {
             return (
               <button
                 key={t.id}
-                className={'tab' + (active === t.id ? ' on' : '')}
+                className={'tab' + (active === t.id ? ' on' : '') + tabMark(t.id)}
+                {...tabDrag(t.id)}
                 title="Split view"
                 onClick={() => setActive(t.id)}
                 onAuxClick={(e) => e.button === 1 && closeTab(t.id)}
@@ -622,7 +681,8 @@ export function App() {
           return (
             <button
               key={t.id}
-              className={'tab' + (active === t.id ? ' on' : '')}
+              className={'tab' + (active === t.id ? ' on' : '') + tabMark(t.id)}
+              {...tabDrag(t.id)}
               title={`${s.name} – ${s.host}`}
               onClick={() => setActive(t.id)}
               onAuxClick={(e) => e.button === 1 && closeTab(t.id)}
@@ -649,7 +709,24 @@ export function App() {
             </button>
           );
         })}
-        <button className="tab-add" title="New connection (Ctrl+K)" onClick={() => setPaletteOpen(true)}>
+        <button
+          className="tab-add"
+          title="New connection (Ctrl+K)"
+          onClick={() => setPaletteOpen(true)}
+          onDragOver={(e) => {
+            // dropping on the plus puts the tab at the end
+            const last = tabs[tabs.length - 1];
+            if (!dragTab || !last) return;
+            e.preventDefault();
+            setDropMark((m) => (m?.id === last.id && m.after ? m : { id: last.id, after: true }));
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            if (dragTab && dropMark) moveTab(dragTab, dropMark.id, dropMark.after);
+            setDragTab(null);
+            setDropMark(null);
+          }}
+        >
           <IconPlus size={17} />
         </button>
         <span className="grow" />
