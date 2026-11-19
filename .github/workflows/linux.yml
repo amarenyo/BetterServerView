@@ -3,6 +3,7 @@ name: Linux (test build)
 on:
   push:
     branches: [linux]
+    paths-ignore: ['docs/**']
   workflow_dispatch:
 
 jobs:
@@ -22,7 +23,7 @@ jobs:
         run: dotnet publish src/MultiServerView.Linux -c Release -r linux-x64 --self-contained -o out/msv
       - name: Self-test (no window)
         run: ./out/msv/multiserverview --selftest "$RUNNER_TEMP/selftest"
-      - name: Package
-        run: tar -C out -czf MultiServerView-linux-x64.tar.gz msv
+      - name: Package (AppImage, .deb, .tar.gz)
+        run: bash packaging/linux/build-packages.sh out/msv 0.0.0-test dist
       - uses: actions/upload-artifact@v4
-        with: { name: MultiServerView-linux-x64, path: MultiServerView-linux-x64.tar.gz }
+        with: { name: MultiServerView-linux-x64, path: dist/* }

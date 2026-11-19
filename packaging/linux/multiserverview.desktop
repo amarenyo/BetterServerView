@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=MultiServerView
+Comment=SSH, SFTP, RDP and VNC in one window
+Exec=multiserverview
+Icon=multiserverview
+Categories=Network;RemoteAccess;System;
+Terminal=false

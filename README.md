@@ -188,9 +188,15 @@ SSH/SFTP/tunnel integration tests only run when `MSV_SSH_TEST_DIR` points to a f
 | `installer/` | Inno Setup script for the installer wizard |
 | `docs/` | Supabase SQL, comparison with Termius, first-run checklist, screenshots |
 
-## Linux (test version)
+## Linux
 
-An early Linux build lives on the `linux` branch (Photino/WebKitGTK window, same vault and UI). Needs `libwebkit2gtk-4.1-0 libgtk-3-0 libnotify4` (Ubuntu 24.04). Differences: system title bar, secrets protected by a key file (mode 600) instead of DPAPI, RDP opens in an external client (xfreerdp/Remmina), no in-app self-update. `multiserverview --selftest <folder>` checks vault, sources, MCP and (with `MSV_SMOKE_SSH=host:port:user:password`) SSH/SFTP without a window.
+Download from the [Releases](https://github.com/jxhnch/MultiServerView/releases) page:
+
+- **`.deb`** (Ubuntu/Debian, easiest): `sudo apt install ./MultiServerView-<version>-linux-x64.deb` - installs the needed libraries too.
+- **`.AppImage`**: `chmod +x MultiServerView-*.AppImage && ./MultiServerView-*.AppImage`. Needs `libwebkit2gtk-4.1-0 libgtk-3-0 libnotify4` from your distribution.
+- **`.tar.gz`**: unpack and run `multiserverview`.
+
+Same vault and UI as on Windows, RDP is drawn inside the app. Differences: system title bar, secrets protected by a key file (mode 600) instead of DPAPI, no in-app self-update (download the new version from the releases page). `multiserverview --selftest <folder>` checks vault, sources, MCP and (with `MSV_SMOKE_SSH=host:port:user:password`) SSH/SFTP without a window.
 
 ## Known limitations
 
