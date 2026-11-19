@@ -82,7 +82,7 @@ public static class VmwareLibrary
         string Get(string key) => v.TryGetValue(key, out var s) ? s : "";
 
         var name = Get("displayName");
-        if (name.Length == 0) name = Path.GetFileNameWithoutExtension(path);
+        if (name.Length == 0) name = Path.GetFileNameWithoutExtension(path[(path.LastIndexOfAny(new[] { (char)92, '/' }) + 1)..]); // VMware paths may be Windows paths even when this runs on Linux
 
         // First network card that really exists (if "present" is missing, it counts as present).
         var nic = Enumerable.Range(0, 10).FirstOrDefault(i => Get($"ethernet{i}.present").Length > 0
