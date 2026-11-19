@@ -11,6 +11,19 @@ namespace MultiServerView.Linux;
 /// </summary>
 internal static class SelfTest
 {
+    /// <summary>Test helper: creates a vault with one RDP host so the window can be driven without typing a form.</summary>
+    public static async Task<int> SeedRdpAsync(string data, string vaultPassword, string host, int port, string user, string password)
+    {
+        Directory.CreateDirectory(data);
+        var platform = new LinuxPlatform(data, _ => Task.FromResult<string?>(null), _ => Task.FromResult<string?>(null), _ => false);
+        using var bridge = HostBootstrap.Create(data, platform, _ => { }, _ => new NoEmbeddedRdp());
+        async Task Call(string method, object args) => await bridge.HandleAsync(JsonSerializer.Serialize(new { id = 1, method, @params = args }, Json.Options));
+        await Call("vault.create", new { password = vaultPassword });
+        await Call("servers.save", new { name = "rdp-test", host, port, protocol = "rdp", username = user, password, group = "Server" });
+        Console.WriteLine("seeded");
+        return 0;
+    }
+
     public static async Task<int> RunAsync(string dir)
     {
         Directory.CreateDirectory(dir);

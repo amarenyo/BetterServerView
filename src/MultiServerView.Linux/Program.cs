@@ -17,6 +17,15 @@ internal static class Program
             Environment.Exit(SelfTest.RunAsync(testDir).GetAwaiter().GetResult());
         }
 
+        if (args.Length >= 3 && args[0] == "--testbridge")
+            Environment.Exit(TestBridge.Run(int.Parse(args[1]), args[2]));
+
+        if (args.Length >= 7 && args[0] == "--seed-rdp")
+        {
+            // test helper: --seed-rdp <dataDir> <vaultPassword> <host> <port> <user> <password>
+            Environment.Exit(SelfTest.SeedRdpAsync(args[1], args[2], args[3], int.Parse(args[4]), args[5], args.Length > 6 ? args[6] : "").GetAwaiter().GetResult());
+        }
+
         // MSV_DATA_DIR: own data folder (for tests); otherwise ~/.config/MultiServerView
         var dataDir = Environment.GetEnvironmentVariable("MSV_DATA_DIR");
         if (string.IsNullOrWhiteSpace(dataDir))
@@ -79,6 +88,7 @@ internal static class Program
         bridge = HostBootstrap.Create(dataDir, platform, Emit, _ => new NoEmbeddedRdp());
 
         window = new PhotinoWindow()
+            .SetLogVerbosity(0) // Photino would print every message, including host passwords, to the console
             .SetTitle("MultiServerView")
             .SetUseOsDefaultSize(false)
             .SetSize(1360, 860)

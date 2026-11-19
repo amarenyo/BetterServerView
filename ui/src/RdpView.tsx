@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, isNative, onEvent, type Rect } from './bridge';
+import { api, getPlatform, isNative, onEvent, type Rect } from './bridge';
+import { RdpWebView } from './RdpWebView';
 import { SessionFrame } from './SessionFrame';
 import type { Server, SessionStatus } from './types';
 
@@ -8,7 +9,28 @@ import type { Server, SessionStatus } from './types';
  * over the placeholder area (.rdp-box). That is why this element reports its position and
  * size (in real pixels) to the host, and whether it should be visible right now.
  */
-export function RdpView({
+type RdpProps = {
+  tabId: string;
+  server: Server;
+  active: boolean;
+  reconnectKey: number;
+  onStatus: (tabId: string, status: SessionStatus) => void;
+  onReconnect: () => void;
+  onDuplicate: () => void;
+  onEdit: () => void;
+};
+
+/** Linux draws RDP in the UI (IronRDP); Windows hosts the native control. */
+export function RdpView(props: RdpProps) {
+  const [platform, setPlatform] = useState<string | null>(null);
+  useEffect(() => {
+    void getPlatform().then((p) => setPlatform(p.platform));
+  }, []);
+  if (platform === null) return null;
+  return platform === 'linux' ? <RdpWebView {...props} /> : <RdpNativeView {...props} />;
+}
+
+function RdpNativeView({
   tabId,
   server,
   active,

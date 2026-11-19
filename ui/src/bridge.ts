@@ -1053,5 +1053,7 @@ export const api = {
   sourceSignUp: (c: SourceConfigInput) => call<{ signedIn: boolean }>('source.signUp', c),
   sourcePickFolder: () => call<{ path: string | null }>('source.pickFolder'),
   appInfo: () => call<PlatformInfo>('app.info'),
+  rdpWeb: (sessionId: string, serverId: string) =>
+    call<{ url: string; host: string; username: string; domain: string; password: string }>('rdp.web', { sessionId, serverId }),
   windowCommand: (command: 'state' | 'minimize' | 'maximize' | 'close') => call<{ maximized: boolean }>('window.command', { command }),
 };

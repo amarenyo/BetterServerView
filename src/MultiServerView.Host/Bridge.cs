@@ -30,6 +30,7 @@ public sealed class Bridge : IDisposable
     private readonly AppSettingsStore _settings;
     private readonly IHostPlatform _platform;
     private readonly ConcurrentDictionary<string, JumpTunnel> _tunnels = new();
+    private RdpWebProxy? _rdpWeb;
     private readonly ConcurrentDictionary<string, SshPump> _ssh = new();
     private readonly ConcurrentDictionary<string, SftpSession> _sftp = new();
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _transfers = new();
@@ -272,6 +273,31 @@ public sealed class Bridge : IDisposable
                     throw;
                 }
                 return null;
+            }
+            case "rdp.web":
+            {
+                // RDP drawn by the UI itself (IronRDP in a canvas): the UI gets a one-time WebSocket address of the local proxy.
+                var server = _vault.FindResolved(Str(p, "serverId")) ?? throw new KeyNotFoundException("Server not found.");
+                var sessionId = Str(p, "sessionId");
+                var hid = _history.Begin(server, "rdp");
+                try
+                {
+                    var effective = await TunnelFor(sessionId, server);
+                    var proxy = _rdpWeb ??= new RdpWebProxy();
+                    var url = proxy.Register(effective.Host, effective.Port > 0 ? effective.Port : 3389);
+                    var user = server.Username ?? "";
+                    var domain = "";
+                    var slash = user.IndexOf((char)92);
+                    if (slash > 0) { domain = user[..slash]; user = user[(slash + 1)..]; }
+                    _history.End(hid, true);
+                    return new { url, host = server.Host, username = user, domain, password = server.Password ?? "" };
+                }
+                catch (Exception ex)
+                {
+                    CloseTunnel(sessionId);
+                    _history.End(hid, false, Friendly(ex));
+                    throw;
+                }
             }
             case "rdp.layout":
                 _rdp.Layout(Str(p, "sessionId"), Bounds(p), Bool(p, "visible"));
@@ -1178,5 +1204,6 @@ public sealed class Bridge : IDisposable
         foreach (var id in _sftp.Keys.ToList()) CloseSftp(id);
         CloseAllSessions();
         _vncProxy.Dispose();
+        _rdpWeb?.Dispose();
     }
 }
