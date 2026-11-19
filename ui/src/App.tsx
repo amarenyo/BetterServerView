@@ -378,12 +378,16 @@ export function App() {
     const touch = () => (lastActivity.current = Date.now());
     const events = ['mousemove', 'mousedown', 'keydown', 'wheel', 'touchstart'] as const;
     events.forEach((e) => window.addEventListener(e, touch, true));
+    const offMcp = onEvent((e) => {
+      if (e.event === 'mcp.activity' && getUiSettings().mcpKeepUnlocked) lastActivity.current = Date.now();
+    });
     const timer = window.setInterval(() => {
       const minutes = getUiSettings().autoLockMinutes;
       if (minutes > 0 && Date.now() - lastActivity.current > minutes * 60_000) void lock();
     }, 15_000);
     return () => {
       events.forEach((e) => window.removeEventListener(e, touch, true));
+      offMcp();
       window.clearInterval(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -17,18 +17,23 @@ public sealed class McpService : IMcpBackend, IDisposable
     private readonly VaultStore _vault;
     private readonly Func<string, int, string, HostKeyTrust> _check;
     private readonly JumpResolver _jumps;
+    private readonly Action? _onActivity;
     private readonly McpHandler _handler;
+    private readonly McpConnectionPool<SshExecSession> _sshPool = new(TimeSpan.FromSeconds(90));
+    private readonly McpConnectionPool<PooledSftp> _sftpPool = new(TimeSpan.FromSeconds(90));
     private readonly object _gate = new();
     private HttpListener? _listener;
     private CancellationTokenSource? _cts;
     private string _token = "";
     private int _port;
+    private long _lastActivityTick = long.MinValue;
 
-    public McpService(VaultStore vault, Func<string, int, string, HostKeyTrust> check, JumpResolver jumps)
+    public McpService(VaultStore vault, Func<string, int, string, HostKeyTrust> check, JumpResolver jumps, Action? onActivity = null)
     {
         _vault = vault;
         _check = check;
         _jumps = jumps;
+        _onActivity = onActivity;
         _handler = new McpHandler(this);
     }
 
@@ -37,40 +42,57 @@ public sealed class McpService : IMcpBackend, IDisposable
 
     public bool Running { get { lock (_gate) return _listener != null; } }
 
+    /// <summary>Closes all pooled SSH/SFTP connections (for example after vault lock or credential changes).</summary>
+    public void InvalidateConnections()
+    {
+        _sshPool.Clear();
+        _sftpPool.Clear();
+    }
+
     public void Apply(AppSettings settings)
     {
+        var clear = false;
         lock (_gate)
         {
             if (settings.McpEnabled && _listener != null && _port == settings.McpPort && _token == settings.McpToken) return;
+            clear = _listener != null;
             StopLocked();
             Error = null;
-            if (!settings.McpEnabled || settings.McpToken.Length == 0) return;
-            try
+            if (!settings.McpEnabled || settings.McpToken.Length == 0)
             {
-                var listener = new HttpListener();
-                listener.Prefixes.Add($"http://127.0.0.1:{settings.McpPort}/");
-                try { listener.Prefixes.Add($"http://localhost:{settings.McpPort}/"); }
-                catch (HttpListenerException) { /* 127.0.0.1 is already listening */ }
-                listener.Start();
-                var port = settings.McpPort;
-                var token = settings.McpToken;
-                var cts = new CancellationTokenSource();
-                _listener = listener;
-                _port = port;
-                _token = token;
-                _cts = cts;
-                _ = Task.Run(() => LoopAsync(listener, port, token, cts.Token));
+                // Still clear below if the listener had been running
             }
-            catch (Exception ex) when (ex is HttpListenerException or ObjectDisposedException)
+            else
             {
-                Error = $"The MCP server could not start on port {settings.McpPort}: {ex.Message}";
+                try
+                {
+                    var listener = new HttpListener();
+                    listener.Prefixes.Add($"http://127.0.0.1:{settings.McpPort}/");
+                    try { listener.Prefixes.Add($"http://localhost:{settings.McpPort}/"); }
+                    catch (HttpListenerException) { /* 127.0.0.1 is already listening */ }
+                    listener.Start();
+                    var port = settings.McpPort;
+                    var token = settings.McpToken;
+                    var cts = new CancellationTokenSource();
+                    _listener = listener;
+                    _port = port;
+                    _token = token;
+                    _cts = cts;
+                    _ = Task.Run(() => LoopAsync(listener, port, token, cts.Token));
+                }
+                catch (Exception ex) when (ex is HttpListenerException or ObjectDisposedException)
+                {
+                    Error = $"The MCP server could not start on port {settings.McpPort}: {ex.Message}";
+                }
             }
         }
+        if (clear) InvalidateConnections();
     }
 
     public void Stop()
     {
         lock (_gate) StopLocked();
+        InvalidateConnections();
     }
 
     private void StopLocked()
@@ -81,7 +103,12 @@ public sealed class McpService : IMcpBackend, IDisposable
         _cts = null;
     }
 
-    public void Dispose() => Stop();
+    public void Dispose()
+    {
+        Stop();
+        _sshPool.Dispose();
+        _sftpPool.Dispose();
+    }
 
     private async Task LoopAsync(HttpListener listener, int port, string token, CancellationToken ct)
     {
@@ -114,6 +141,7 @@ public sealed class McpService : IMcpBackend, IDisposable
             var body = await reader.ReadToEndAsync(ct);
             if (body.Length > 5_000_000) { response.StatusCode = 413; return; }
 
+            NotifyActivity();
             var answer = await _handler.HandleAsync(body, ct);
             if (answer == null) { response.StatusCode = 202; response.ContentLength64 = 0; return; }
             var bytes = Encoding.UTF8.GetBytes(answer);
@@ -129,6 +157,17 @@ public sealed class McpService : IMcpBackend, IDisposable
         {
             try { response.Close(); } catch (Exception) { /* connection already gone */ }
         }
+    }
+
+    private void NotifyActivity()
+    {
+        var cb = _onActivity;
+        if (cb == null) return;
+        var now = Environment.TickCount64;
+        var prev = Interlocked.Read(ref _lastActivityTick);
+        if (prev != long.MinValue && now - prev < 10_000) return;
+        if (Interlocked.CompareExchange(ref _lastActivityTick, now, prev) != prev) return;
+        try { cb(); } catch { /* UI notification errors must never break MCP calls */ }
     }
 
     private static bool TokenOk(string? header, string token)
@@ -153,46 +192,69 @@ public sealed class McpService : IMcpBackend, IDisposable
     public async Task<McpExecResult> RunCommandAsync(string host, string command, int timeoutSeconds, CancellationToken ct)
     {
         var (server, key) = Resolve(host);
-        var r = await SshExec.RunAsync(server, key, _check, _jumps, command, TimeSpan.FromSeconds(timeoutSeconds), ct);
+        var r = await _sshPool.ExecuteAsync(
+            server.Id,
+            token => SshExecSession.ConnectAsync(server, key, _check, _jumps, token),
+            s => s.IsConnected,
+            async s =>
+            {
+                var res = await s.RunAsync(command, TimeSpan.FromSeconds(timeoutSeconds), ct);
+                if (res.TimedOut) s.Disconnect(); // do not reuse a connection whose command timed out
+                return res;
+            },
+            SshExec.IsConnectionError,
+            ct);
         return new McpExecResult(r.StdOut, r.StdErr, r.ExitCode, r.TimedOut);
     }
 
-    public async Task<string> ReadFileAsync(string host, string path, CancellationToken ct)
-    {
-        var (sftp, home) = await OpenSftpAsync(host, ct);
-        using (sftp) return (await sftp.ReadTextAsync(SftpSession.Normalize(home, path))).Content;
-    }
+    public Task<string> ReadFileAsync(string host, string path, CancellationToken ct) =>
+        RunSftpAsync(host, async p => (await p.Sftp.ReadTextAsync(SftpSession.Normalize(p.Home, path))).Content, ct);
 
-    public async Task WriteFileAsync(string host, string path, string content, CancellationToken ct)
-    {
-        var (sftp, home) = await OpenSftpAsync(host, ct);
-        using (sftp) await sftp.WriteTextAsync(SftpSession.Normalize(home, path), content, "\n", false, 0, 0, force: true);
-    }
-
-    public async Task<IReadOnlyList<McpFileEntry>> ListDirectoryAsync(string host, string path, CancellationToken ct)
-    {
-        var (sftp, _) = await OpenSftpAsync(host, ct);
-        using (sftp)
+    public Task WriteFileAsync(string host, string path, string content, CancellationToken ct) =>
+        RunSftpAsync(host, async p =>
         {
-            var listing = await sftp.ListAsync(path);
-            return listing.Entries.Select(e => new McpFileEntry(e.Name, e.IsDir, e.Size)).ToList();
-        }
-    }
+            await p.Sftp.WriteTextAsync(SftpSession.Normalize(p.Home, path), content, "\n", false, 0, 0, force: true);
+            return true;
+        }, ct);
 
-    private async Task<(SftpSession Sftp, string Home)> OpenSftpAsync(string host, CancellationToken ct)
+    public Task<IReadOnlyList<McpFileEntry>> ListDirectoryAsync(string host, string path, CancellationToken ct) =>
+        RunSftpAsync<IReadOnlyList<McpFileEntry>>(host, async p =>
+        {
+            var listing = await p.Sftp.ListAsync(path);
+            return listing.Entries.Select(e => new McpFileEntry(e.Name, e.IsDir, e.Size)).ToList();
+        }, ct);
+
+    private Task<T> RunSftpAsync<T>(string host, Func<PooledSftp, Task<T>> action, CancellationToken ct)
     {
         var (server, key) = Resolve(host);
+        return _sftpPool.ExecuteAsync(
+            server.Id,
+            token => OpenSftpAsync(server, key, token),
+            p => p.IsConnected,
+            action,
+            SshExec.IsConnectionError,
+            ct);
+    }
+
+    private async Task<PooledSftp> OpenSftpAsync(ServerEntry server, KeyEntry? key, CancellationToken ct)
+    {
         var sftp = new SftpSession(server, key, _check, _jumps);
         try
         {
             var home = await sftp.ConnectAsync(ct);
-            return (sftp, home);
+            return new PooledSftp(sftp, home);
         }
         catch
         {
             sftp.Dispose();
             throw;
         }
+    }
+
+    private sealed record PooledSftp(SftpSession Sftp, string Home) : IDisposable
+    {
+        public bool IsConnected => Sftp.IsConnected;
+        public void Dispose() => Sftp.Dispose();
     }
 
     private VaultStore Unlocked() => _vault.IsUnlocked ? _vault : throw new InvalidOperationException("The vault is locked. Unlock MultiServerView first.");

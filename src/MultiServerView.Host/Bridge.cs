@@ -52,7 +52,7 @@ public sealed class Bridge : IDisposable
         _rdp = rdp;
         _emit = emit;
         _auto = new AutoSync(vault, source, emit, CloseEverythingForReplacedVault);
-        _mcp = new McpService(vault, CheckHost, Jumps);
+        _mcp = new McpService(vault, CheckHost, Jumps, () => emit(new { @event = "mcp.activity" }));
         _mcp.Apply(settings.Current);
     }
 
@@ -135,6 +135,7 @@ public sealed class Bridge : IDisposable
                 foreach (var sid in _sftp.Keys.ToList()) CloseSftp(sid);
                 foreach (var tid in _tunnels.Keys.ToList()) CloseTunnel(tid);
                 _forwards.StopAll();
+                _mcp.InvalidateConnections();
                 return _vault.Clear(Str(p, "password"));
             }
             case "vault.lock":
@@ -142,6 +143,7 @@ public sealed class Bridge : IDisposable
                 foreach (var sid in _sftp.Keys.ToList()) CloseSftp(sid);
                 foreach (var tid in _tunnels.Keys.ToList()) CloseTunnel(tid);
                 _forwards.StopAll();
+                _mcp.InvalidateConnections();
                 _vault.Lock();
                 return null;
 
@@ -149,10 +151,15 @@ public sealed class Bridge : IDisposable
             case "servers.list":
                 return _vault.List();
             case "servers.save":
-                return _vault.Upsert(p.Deserialize<ServerEntry>(Json.Options)
-                                     ?? throw new ArgumentException("Invalid server."));
+            {
+                var saved = _vault.Upsert(p.Deserialize<ServerEntry>(Json.Options)
+                                          ?? throw new ArgumentException("Invalid server."));
+                _mcp.InvalidateConnections();
+                return saved;
+            }
             case "servers.delete":
                 _vault.Delete(Str(p, "id"));
+                _mcp.InvalidateConnections();
                 return null;
             case "servers.touch":
                 return _vault.Touch(Str(p, "id"));
@@ -160,6 +167,7 @@ public sealed class Bridge : IDisposable
             {
                 var server = _vault.Find(Str(p, "id")) ?? throw new KeyNotFoundException("Server not found.");
                 _vault.ForgetHostKey(server.Host, server.Port);
+                _mcp.InvalidateConnections();
                 return null;
             }
             case "import.mremoteng":
@@ -181,14 +189,19 @@ public sealed class Bridge : IDisposable
                 {
                     // Only renamed: the key material stays as it is.
                     existing.Name = key.Name;
-                    return KeyDto(_vault.UpsertKey(existing));
+                    var renamed = KeyDto(_vault.UpsertKey(existing));
+                    _mcp.InvalidateConnections();
+                    return renamed;
                 }
 
                 key.Kind = KeyTools.Inspect(key.PrivateKey, key.Passphrase);
-                return KeyDto(_vault.UpsertKey(key));
+                var savedKey = KeyDto(_vault.UpsertKey(key));
+                _mcp.InvalidateConnections();
+                return savedKey;
             }
             case "keys.delete":
                 _vault.DeleteKey(Str(p, "id"));
+                _mcp.InvalidateConnections();
                 return null;
             case "keys.generate":
             {
@@ -211,6 +224,7 @@ public sealed class Bridge : IDisposable
                     updated.Auth = AuthMethod.Key;
                     updated.KeyId = key.Id;
                     _vault.Upsert(updated);
+                    _mcp.InvalidateConnections();
                 }
                 return null;
             }
@@ -352,10 +366,13 @@ public sealed class Bridge : IDisposable
                 var existing = string.IsNullOrWhiteSpace(identity.Id) ? null : _vault.FindIdentity(identity.Id);
                 // Empty password field = unchanged (saved passwords never go to the UI).
                 if (existing != null && identity.Password.Length == 0 && identity.Auth == AuthMethod.Password) identity.Password = existing.Password;
-                return IdentityDto(_vault.UpsertIdentity(identity));
+                var saved = IdentityDto(_vault.UpsertIdentity(identity));
+                _mcp.InvalidateConnections();
+                return saved;
             }
             case "identities.delete":
                 _vault.DeleteIdentity(Str(p, "id"));
+                _mcp.InvalidateConnections();
                 return null;
 
             // ---------------------------------------------------------- Snippets
@@ -420,6 +437,7 @@ public sealed class Bridge : IDisposable
                 return _vault.ListKnownHosts().Select(kv => new { id = kv.Key, fingerprint = kv.Value }).ToList();
             case "knownhosts.remove":
                 _vault.RemoveKnownHost(Str(p, "id"));
+                _mcp.InvalidateConnections();
                 return null;
             case "history.list":
                 return _history.List();
@@ -656,7 +674,9 @@ public sealed class Bridge : IDisposable
             case "vmware.removeImported":
             {
                 var ids = _vault.List().Where(s => s.VmwareRef.Length > 0).Select(s => s.Id).ToList();
-                return new { removed = _vault.DeleteMany(ids) };
+                var removed = _vault.DeleteMany(ids);
+                _mcp.InvalidateConnections();
+                return new { removed };
             }
 
             // ---------------------------------------------------------- Proxmox
@@ -698,7 +718,9 @@ public sealed class Bridge : IDisposable
             {
                 var id = Str(p, "id");
                 var ids = _vault.List().Where(s => s.ProxmoxRef.StartsWith(id + ":", StringComparison.Ordinal)).Select(s => s.Id).ToList();
-                return new { removed = _vault.DeleteMany(ids) };
+                var removed = _vault.DeleteMany(ids);
+                _mcp.InvalidateConnections();
+                return new { removed };
             }
             case "proxmox.import":
             {
@@ -1172,6 +1194,7 @@ public sealed class Bridge : IDisposable
         foreach (var sid in _sftp.Keys.ToList()) CloseSftp(sid);
         foreach (var tid in _tunnels.Keys.ToList()) CloseTunnel(tid);
         _forwards.StopAll();
+        _mcp.InvalidateConnections();
     }
 
     private static Rectangle Bounds(JsonElement p) =>

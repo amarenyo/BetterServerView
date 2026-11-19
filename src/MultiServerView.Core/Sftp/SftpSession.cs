@@ -36,6 +36,9 @@ public sealed class SftpSession : IDisposable
 
     private SftpClient Client => _client ?? throw new InvalidOperationException("The SFTP connection is not open.");
 
+    /// <summary>True while the underlying SFTP client and any jump tunnel remain connected.</summary>
+    public bool IsConnected => _client?.IsConnected == true && (_tunnel == null || _tunnel.IsConnected);
+
     public async Task<string> ConnectAsync(CancellationToken ct = default)
     {
         var tunnel = await JumpTunnel.OpenAsync(_server, _jumps, _check, ct);
