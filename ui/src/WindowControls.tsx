@@ -1,5 +1,23 @@
 import { useEffect, useState } from 'react';
-import { api, isNative, onEvent } from './bridge';
+import { api, getPlatform, isNative, onEvent } from './bridge';
+
+/** true while the app draws its own title bar (Windows); false when the system's title bar is used (Linux). */
+export function useCustomTitleBar(): boolean {
+  const [custom, setCustom] = useState(true);
+  useEffect(() => {
+    let alive = true;
+    void getPlatform().then((p) => {
+      if (!alive) return;
+      setCustom(p.customTitleBar);
+      document.documentElement.classList.toggle('sys-titlebar', !p.customTitleBar);
+      document.documentElement.classList.add('platform-' + p.platform);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return custom;
+}
 
 /** Whether the window is maximized (Windows app only; always false in the browser). Also sets the class "win-max" on the root element. */
 export function useWindowMaximized(): boolean {
@@ -31,7 +49,8 @@ export function useWindowMaximized(): boolean {
 /** Minimize, maximize/restore and close for the frameless window. */
 export function WindowControls() {
   const maximized = useWindowMaximized();
-  if (!isNative) return null;
+  const custom = useCustomTitleBar();
+  if (!isNative || !custom) return null;
 
   return (
     <div className="win-ctl">
@@ -67,7 +86,8 @@ export function WindowControls() {
 
 /** Slim title bar for screens without a tab bar (e.g. unlock): for dragging the window plus window buttons. */
 export function TitleStrip() {
-  if (!isNative) return null;
+  const custom = useCustomTitleBar();
+  if (!isNative || !custom) return null;
   return (
     <div className="title-strip">
       <span className="grow" />

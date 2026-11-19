@@ -2873,3 +2873,8 @@ label {
 .tab.drop-after {
   box-shadow: inset -3px 0 0 var(--accent);
 }
+
+/* Linux: the system draws the title bar, so the tab bar needs no room for window buttons */
+.sys-titlebar .tabbar {
+  padding-top: 7px;
+}

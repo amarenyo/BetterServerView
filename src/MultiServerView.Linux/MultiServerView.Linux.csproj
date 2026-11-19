@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>multiserverview</AssemblyName>
+    <RootNamespace>MultiServerView.Linux</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MultiServerView.Core\MultiServerView.Core.csproj" />
+    <ProjectReference Include="..\MultiServerView.Host\MultiServerView.Host.csproj" />
+  </ItemGroup>
+
+  <!-- The built UI (ui/ -> src/MultiServerView.App/wwwroot) is shipped next to the program. -->
+  <ItemGroup>
+    <Content Include="..\MultiServerView.App\wwwroot\**\*" Link="wwwroot\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Photino.NET" Version="4.0.16" />
+  </ItemGroup>
+
+</Project>

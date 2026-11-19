@@ -124,7 +124,7 @@ export function RdpView({
       extraActions={
         isNative && (
           <button className="ghost" title="Opens the normal Windows RDP window (mstsc)" onClick={() => void api.rdpExternal(server.id)}>
-            Open in Windows RDP
+            Open in RDP client
           </button>
         )
       }

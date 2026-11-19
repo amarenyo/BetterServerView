@@ -1,0 +1,28 @@
+name: Linux (test build)
+
+on:
+  push:
+    branches: [linux]
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: 8.0.x }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - name: Build UI
+        run: cd ui && npm ci && npm run build
+      - name: Core tests
+        run: dotnet test tests/MultiServerView.Core.Tests
+      - name: Publish
+        run: dotnet publish src/MultiServerView.Linux -c Release -r linux-x64 --self-contained -o out/msv
+      - name: Self-test (no window)
+        run: ./out/msv/multiserverview --selftest "$RUNNER_TEMP/selftest"
+      - name: Package
+        run: tar -C out -czf MultiServerView-linux-x64.tar.gz msv
+      - uses: actions/upload-artifact@v4
+        with: { name: MultiServerView-linux-x64, path: MultiServerView-linux-x64.tar.gz }

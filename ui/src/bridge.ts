@@ -74,23 +74,56 @@ export function fromB64(b64: string): Uint8Array {
   return out;
 }
 
-// ---------------------------------------------------------------- WebView2
+// ---------------------------------------------------------------- Host window (WebView2 on Windows, WebKitGTK via Photino on Linux)
+
+interface Transport {
+  post(message: unknown): void;
+  onMessage(listener: (data: unknown) => void): void;
+}
 
 interface WebView2Api {
   postMessage(message: unknown): void;
   addEventListener(type: 'message', listener: (e: MessageEvent) => void): void;
 }
-const webview = (window as unknown as { chrome?: { webview?: WebView2Api } }).chrome?.webview;
+interface PhotinoApi {
+  sendMessage(message: string): void;
+  receiveMessage(listener: (message: string) => void): void;
+}
 
-export const isNative = !!webview;
+function findTransport(): Transport | null {
+  const w = window as unknown as { chrome?: { webview?: WebView2Api }; external?: Partial<PhotinoApi> };
+  const webview = w.chrome?.webview;
+  if (webview)
+    return {
+      post: (m) => webview.postMessage(m),
+      onMessage: (l) => webview.addEventListener('message', (e) => l(e.data)),
+    };
+  const photino = w.external;
+  if (photino && typeof photino.sendMessage === 'function' && typeof photino.receiveMessage === 'function')
+    return {
+      post: (m) => photino.sendMessage!(JSON.stringify(m)),
+      onMessage: (l) =>
+        photino.receiveMessage!((text) => {
+          try {
+            l(JSON.parse(text));
+          } catch {
+            /* not for us */
+          }
+        }),
+    };
+  return null;
+}
+const transport = findTransport();
+
+export const isNative = !!transport;
 
 type Reply = { id: number; result?: unknown; error?: string };
 const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
 let seq = 0;
 
-if (webview) {
-  webview.addEventListener('message', (e) => {
-    const msg = e.data as Reply & Partial<HostEvent>;
+if (transport) {
+  transport.onMessage((data) => {
+    const msg = data as Reply & Partial<HostEvent>;
     if (msg.event) {
       dispatch(msg as HostEvent);
       return;
@@ -107,7 +140,7 @@ function callNative<T>(method: string, params?: unknown): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const id = ++seq;
     pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
-    webview!.postMessage({ id, method, params });
+    transport!.post({ id, method, params });
   });
 }
 
@@ -470,6 +503,8 @@ async function callMock(method: string, params: any): Promise<unknown> {
       return onlyNative('TeamViewer');
     case 'mcp.status':
       return { running: false, error: null };
+    case 'app.info':
+      return { platform: 'browser', customTitleBar: true, canSelfUpdate: false };
     case 'update.check':
       return { current: 'dev', available: false, version: '', notes: '', pageUrl: '', canInstall: false };
     case 'update.install':
@@ -821,6 +856,19 @@ export interface Rect {
   h: number;
 }
 
+/** What differs between the Windows and the Linux app. */
+export interface PlatformInfo {
+  platform: 'windows' | 'linux' | 'browser';
+  /** The app draws its own title bar and window buttons (Windows); otherwise the system title bar is used. */
+  customTitleBar: boolean;
+  canSelfUpdate: boolean;
+}
+
+let platformPromise: Promise<PlatformInfo> | null = null;
+/** Asked once; "browser" in the demo mode. */
+export const getPlatform = (): Promise<PlatformInfo> =>
+  (platformPromise ??= isNative ? api.appInfo().catch(() => ({ platform: 'windows' as const, customTitleBar: true, canSelfUpdate: false })) : Promise.resolve({ platform: 'browser' as const, customTitleBar: true, canSelfUpdate: false }));
+
 export interface UpdateStatus {
   current: string;
   available: boolean;
@@ -1004,5 +1052,6 @@ export const api = {
   sourceDisconnect: () => call<{ info: SourceInfo; status: SourceStatus }>('source.disconnect'),
   sourceSignUp: (c: SourceConfigInput) => call<{ signedIn: boolean }>('source.signUp', c),
   sourcePickFolder: () => call<{ path: string | null }>('source.pickFolder'),
+  appInfo: () => call<PlatformInfo>('app.info'),
   windowCommand: (command: 'state' | 'minimize' | 'maximize' | 'close') => call<{ maximized: boolean }>('window.command', { command }),
 };

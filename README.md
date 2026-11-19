@@ -188,6 +188,10 @@ SSH/SFTP/tunnel integration tests only run when `MSV_SSH_TEST_DIR` points to a f
 | `installer/` | Inno Setup script for the installer wizard |
 | `docs/` | Supabase SQL, comparison with Termius, first-run checklist, screenshots |
 
+## Linux (test version)
+
+An early Linux build lives on the `linux` branch (Photino/WebKitGTK window, same vault and UI). Needs `libwebkit2gtk-4.1-0 libgtk-3-0 libnotify4` (Ubuntu 24.04). Differences: system title bar, secrets protected by a key file (mode 600) instead of DPAPI, RDP opens in an external client (xfreerdp/Remmina), no in-app self-update. `multiserverview --selftest <folder>` checks vault, sources, MCP and (with `MSV_SMOKE_SSH=host:port:user:password`) SSH/SFTP without a window.
+
 ## Known limitations
 
 - While a palette or dialog is open, a running RDP window is hidden briefly (the native window would otherwise cover the UI). The session keeps running.
