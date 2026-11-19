@@ -43,6 +43,13 @@ const CLIENTS: Client[] = [
     snippet: (url, token) => j({ servers: { multiserverview: { type: 'http', url, headers: { Authorization: `Bearer ${token}` } } } }),
   },
   {
+    id: 'gemini',
+    label: 'Gemini CLI',
+    intro: 'Add this to the Gemini CLI settings:',
+    where: '%USERPROFILE%\.gemini\settings.json',
+    snippet: (url, token) => j({ mcpServers: { multiserverview: { httpUrl: url, headers: { Authorization: `Bearer ${token}` } } } }),
+  },
+  {
     id: 'antigravity',
     label: 'Antigravity',
     intro: 'Add this to the Antigravity MCP config (or open Additional Options (…) → MCP Servers → Manage MCP Servers → View raw config) and click Refresh:',
