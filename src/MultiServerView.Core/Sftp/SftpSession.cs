@@ -39,17 +39,25 @@ public sealed class SftpSession : IDisposable
     public async Task<string> ConnectAsync(CancellationToken ct = default)
     {
         var tunnel = await JumpTunnel.OpenAsync(_server, _jumps, _check, ct);
-        var client = new SftpClient(SshConnector.BuildConnectionInfo(_server, _key, tunnel?.Host, tunnel?.Port)) { KeepAliveInterval = SshConnector.KeepAlive };
-        var hostKeyError = SshConnector.HookHostKey(client, _server, _check, null);
+        SftpClient? client = null;
+        Func<string?>? hostKeyError = null;
         try
         {
+            client = new SftpClient(SshConnector.BuildConnectionInfo(_server, _key, tunnel?.Host, tunnel?.Port)) { KeepAliveInterval = SshConnector.KeepAlive };
+            hostKeyError = SshConnector.HookHostKey(client, _server, _check, null);
             await Task.Run(() => client.Connect(), ct);
+        }
+        catch (SshConnectException)
+        {
+            client?.Dispose();
+            tunnel?.Dispose();
+            throw;
         }
         catch (Exception ex)
         {
-            client.Dispose();
+            client?.Dispose();
             tunnel?.Dispose();
-            throw new SshConnectException(hostKeyError() ?? SshConnector.Describe(ex), ex);
+            throw new SshConnectException(hostKeyError?.Invoke() ?? SshConnector.Describe(ex), ex);
         }
         _client = client;
         _tunnel = tunnel;
