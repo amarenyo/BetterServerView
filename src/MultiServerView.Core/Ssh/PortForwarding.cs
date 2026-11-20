@@ -104,16 +104,23 @@ public sealed class PortForwardManager : IDisposable
 
     public async Task StartAsync(PortForwardEntry rule, ServerEntry server, KeyEntry? key, Func<string, int, string, HostKeyTrust> check, JumpResolver? jumps = null)
     {
-        if (_running.ContainsKey(rule.Id)) return;
-
         var runner = new ForwardRunner(rule, server, key, check, jumps);
+        if (!_running.TryAdd(rule.Id, runner)) return;
+
         runner.Stopped += reason =>
         {
             if (_running.TryGetValue(rule.Id, out var current) && ReferenceEquals(current, runner)) _running.TryRemove(rule.Id, out _);
             StatusChanged?.Invoke(rule.Id, false, reason);
         };
-        await runner.StartAsync();
-        _running[rule.Id] = runner;
+        try
+        {
+            await runner.StartAsync();
+        }
+        catch
+        {
+            if (_running.TryGetValue(rule.Id, out var current) && ReferenceEquals(current, runner)) _running.TryRemove(rule.Id, out _);
+            throw;
+        }
         StatusChanged?.Invoke(rule.Id, true, null);
     }
 

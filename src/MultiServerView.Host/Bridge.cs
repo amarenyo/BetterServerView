@@ -500,7 +500,8 @@ public sealed class Bridge : IDisposable
                 return null;
             }
             case "sftp.cancel":
-                if (_transfers.TryGetValue(Str(p, "transferId"), out var toCancel)) toCancel.Cancel();
+                if (_transfers.TryGetValue(Str(p, "transferId"), out var toCancel))
+                    try { toCancel.Cancel(); } catch (ObjectDisposedException) { /* already finished */ }
                 return null;
             case "sftp.close":
                 CloseSftp(Str(p, "sessionId"));
@@ -785,6 +786,7 @@ public sealed class Bridge : IDisposable
             _emit(new { @event = "ssh.closed", sessionId, reason });
         };
 
+        if (_ssh.TryGetValue(sessionId, out var prev) && !ReferenceEquals(prev, pump)) prev.Dispose();
         _ssh[sessionId] = pump;
         try
         {
@@ -793,7 +795,7 @@ public sealed class Bridge : IDisposable
         }
         catch (Exception ex)
         {
-            _ssh.TryRemove(sessionId, out _);
+            if (_ssh.TryGetValue(sessionId, out var cur) && ReferenceEquals(cur, pump)) _ssh.TryRemove(sessionId, out _);
             pump.Dispose();
             _history.End(hid, false, Friendly(ex));
             throw;
