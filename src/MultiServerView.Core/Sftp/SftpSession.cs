@@ -181,11 +181,33 @@ public sealed class SftpSession : IDisposable
         progress(new TransferProgress(name, total, total, true));
     }
 
+    /// <summary>
+    /// Combines <paramref name="localDir"/> and a single remote entry name and verifies the resulting path stays
+    /// strictly inside <paramref name="localDir"/> (blocks traversal, path separators and rooted names).
+    /// </summary>
+    public static string SafeLocalChildPath(string localDir, string entryName)
+    {
+        if (string.IsNullOrWhiteSpace(entryName) || entryName is "." or ".."
+            || entryName.IndexOfAny(new[] { '/', '\\', '\0', ':' }) >= 0)
+            throw new InvalidOperationException("Unsafe remote file name: " + entryName);
+
+        var fullRoot = Path.GetFullPath(localDir);
+        var rootWithSep = fullRoot.EndsWith(Path.DirectorySeparatorChar)
+            ? fullRoot
+            : fullRoot + Path.DirectorySeparatorChar;
+        var fullTarget = Path.GetFullPath(Path.Combine(fullRoot, entryName));
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (!fullTarget.StartsWith(rootWithSep, comparison))
+            throw new InvalidOperationException("Unsafe remote file name: " + entryName);
+        return fullTarget;
+    }
+
     /// <summary>Downloads a file or a whole folder (recursively) into the local folder <paramref name="localDir"/>.</summary>
     public async Task DownloadAsync(string remotePath, string localDir, Action<TransferProgress> progress, CancellationToken ct)
     {
         var client = Client;
         var name = remotePath.TrimEnd('/').Split('/').Last();
+        var rootLocal = SafeLocalChildPath(localDir, name);
 
         var (files, dirs) = await Task.Run(() =>
         {
@@ -194,11 +216,10 @@ public sealed class SftpSession : IDisposable
             var d = new List<string>();
             if (attrs.IsDirectory)
             {
-                var rootLocal = Path.Combine(localDir, name);
                 d.Add(rootLocal);
                 CollectRemote(client, remotePath, rootLocal, f, d);
             }
-            else f.Add((remotePath, Path.Combine(localDir, name), attrs.Size));
+            else f.Add((remotePath, rootLocal, attrs.Size));
             foreach (var dir in d) Directory.CreateDirectory(dir);
             return (f, d);
         }, ct);
@@ -224,7 +245,7 @@ public sealed class SftpSession : IDisposable
         foreach (var f in client.ListDirectory(remoteDir))
         {
             if (f.Name is "." or "..") continue;
-            var local = Path.Combine(localDir, f.Name);
+            var local = SafeLocalChildPath(localDir, f.Name);
             if (f.IsDirectory)
             {
                 dirs.Add(local);
