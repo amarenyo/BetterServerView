@@ -138,6 +138,7 @@ internal sealed class LinuxPlatform : IHostPlatform
 internal sealed class KeyFileProtector : ISecretProtector
 {
     private readonly string _keyFile;
+    private readonly object _gate = new();
     private byte[]? _key;
 
     public KeyFileProtector(string keyFile) => _keyFile = keyFile;
@@ -145,13 +146,19 @@ internal sealed class KeyFileProtector : ISecretProtector
     private byte[] Key()
     {
         if (_key != null) return _key;
-        if (File.Exists(_keyFile)) return _key = Convert.FromBase64String(File.ReadAllText(_keyFile).Trim());
+        lock (_gate)
+        {
+            if (_key != null) return _key;
+            if (File.Exists(_keyFile)) return _key = Convert.FromBase64String(File.ReadAllText(_keyFile).Trim());
 
-        Directory.CreateDirectory(Path.GetDirectoryName(_keyFile)!);
-        var key = RandomNumberGenerator.GetBytes(32);
-        File.WriteAllText(_keyFile, Convert.ToBase64String(key));
-        File.SetUnixFileMode(_keyFile, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        return _key = key;
+            Directory.CreateDirectory(Path.GetDirectoryName(_keyFile)!);
+            var key = RandomNumberGenerator.GetBytes(32);
+            var bytes = Encoding.UTF8.GetBytes(Convert.ToBase64String(key));
+            var opts = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
+            if (!OperatingSystem.IsWindows()) opts.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            using (var fs = new FileStream(_keyFile, opts)) fs.Write(bytes);
+            return _key = key;
+        }
     }
 
     public string Protect(string plain)

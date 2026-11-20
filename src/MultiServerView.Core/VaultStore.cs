@@ -79,6 +79,7 @@ public sealed class VaultStore
     {
         lock (_gate)
         {
+            if (_key != null) CryptographicOperations.ZeroMemory(_key.Key);
             _data = null;
             _key = null;
         }
@@ -648,7 +649,8 @@ public sealed class VaultStore
     {
         if (_data == null || _key == null) throw new InvalidOperationException("The vault is locked.");
         var plain = JsonSerializer.SerializeToUtf8Bytes(_data, Json.Options);
-        WriteAtomic(VaultCrypto.Seal(plain, _key));
+        try { WriteAtomic(VaultCrypto.Seal(plain, _key)); }
+        finally { CryptographicOperations.ZeroMemory(plain); }
     }
 
     private void WriteAtomic(byte[] blob)
@@ -658,7 +660,9 @@ public sealed class VaultStore
 
         // Write atomically: temp file first, then replace - so nothing is lost on a crash.
         var tmp = _path + ".tmp";
-        File.WriteAllBytes(tmp, blob);
+        var opts = new FileStreamOptions { Mode = FileMode.Create, Access = FileAccess.Write, Share = FileShare.None };
+        if (!OperatingSystem.IsWindows()) opts.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        using (var fs = new FileStream(tmp, opts)) fs.Write(blob);
         File.Move(tmp, _path, overwrite: true);
     }
 }
