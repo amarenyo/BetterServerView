@@ -202,6 +202,24 @@ public sealed class SftpSession : IDisposable
         return fullTarget;
     }
 
+    private static readonly HashSet<string> BlockedExternalExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".exe", ".com", ".bat", ".cmd", ".msi", ".msp", ".msu",
+        ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".ps1", ".psm1", ".psd1",
+        ".scr", ".pif", ".lnk", ".hta", ".cpl", ".msc", ".reg", ".inf",
+        ".jar", ".dll", ".sys", ".appimage", ".desktop"
+    };
+
+    /// <summary>
+    /// True if opening <paramref name="fileName"/> with the OS default handler (ShellExecute / xdg-open)
+    /// could execute remote code instead of opening a text editor.
+    /// </summary>
+    public static bool IsBlockedExternalExtension(string fileName)
+    {
+        var ext = Path.GetExtension(fileName);
+        return !string.IsNullOrEmpty(ext) && BlockedExternalExtensions.Contains(ext);
+    }
+
     /// <summary>Downloads a file or a whole folder (recursively) into the local folder <paramref name="localDir"/>.</summary>
     public async Task DownloadAsync(string remotePath, string localDir, Action<TransferProgress> progress, CancellationToken ct)
     {
