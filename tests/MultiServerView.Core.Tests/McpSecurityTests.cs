@@ -6,6 +6,8 @@ using Xunit;
 
 namespace MultiServerView.Core.Tests;
 
+// These tests change the global SSH defaults (static): they must not run at the same time.
+[Collection("GlobalSshDefaults")]
 public sealed class McpSecurityTests : IDisposable
 {
     private readonly string _dir;
@@ -35,7 +37,7 @@ public sealed class McpSecurityTests : IDisposable
             return Task.FromResult(new McpExecResult("ok", "", 0, false));
         }
 
-        public Task<string> ReadFileAsync(string host, string path, CancellationToken ct) => Task.FromResult("file-content");
+        public Task<string> ReadFileAsync(string host, string path, int? startLine, int? maxLines, CancellationToken ct) => Task.FromResult("file-content");
 
         public Task WriteFileAsync(string host, string path, string content, CancellationToken ct)
         {
