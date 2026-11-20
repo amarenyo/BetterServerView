@@ -286,6 +286,12 @@ public sealed class SourceService
                 return RefreshOutcome.Conflict;
             }
 
+            if (!VaultCrypto.LooksLikeVault(remote.Blob))
+            {
+                SetStatus(SourceState.Error, "The file at " + Label(cfg.Mode) + " is not a valid vault. Your local copy was not changed.");
+                return RefreshOutcome.Empty;
+            }
+
             if (_store.IsUnlocked)
             {
                 try
@@ -407,6 +413,7 @@ public sealed class SourceService
             if (choice == "source")
             {
                 if (remote == null) throw new SyncException("There is nothing at the source to take over.");
+                if (!VaultCrypto.LooksLikeVault(remote.Blob)) throw new SyncException("The file at the source is not a valid vault.");
                 var backup = _store.ReplaceWithBlob(remote.Blob);
                 Remember(cfg, remote.Version, dirty: false);
                 SetStatus(SourceState.Ready);
