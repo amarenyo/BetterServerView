@@ -34,7 +34,7 @@ dpkg-deb --root-owner-group --build "$D" "$OUT/MultiServerView-$VER-linux-x64.de
 # ---------------- .rpm (Fedora / RHEL-based: dnf installs the needed libraries by itself)
 R="$WORK/rpm"
 RPM_VER="${VER//-/_}"
-mkdir -p "$R/BUILD" "$R/RPMS" "$R/SOURCES" "$R/SPECS" "$R/SRPMS"
+mkdir -p "$R/BUILD" "$R/RPMS" "$R/SOURCES" "$R/SPECS" "$R/SRPMS" "$R/TMP"
 cat > "$R/SPECS/multiserverview.spec" <<EOF
 %global debug_package %{nil}
 %global __strip /bin/true
@@ -74,6 +74,7 @@ cp %{icon_file} %{buildroot}/usr/share/icons/hicolor/512x512/apps/multiservervie
 EOF
 rpmbuild -bb --target x86_64 \
   --define "_topdir $R" \
+  --define "_tmppath $R/TMP" \
   --define "pub_dir $PUB" \
   --define "here_dir $HERE" \
   --define "icon_file $ICON" \
