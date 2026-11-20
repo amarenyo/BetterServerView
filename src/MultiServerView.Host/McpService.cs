@@ -17,20 +17,26 @@ public sealed class McpService : IMcpBackend, IDisposable
     private readonly VaultStore _vault;
     private readonly Func<string, int, string, HostKeyTrust> _check;
     private readonly JumpResolver _jumps;
+    private readonly HistoryStore? _history;
     private readonly McpHandler _handler;
     private readonly object _gate = new();
     private HttpListener? _listener;
     private CancellationTokenSource? _cts;
     private string _token = "";
     private int _port;
+    private bool _readOnly;
+    private HashSet<string> _allowedWorkspaces = new(StringComparer.OrdinalIgnoreCase);
 
-    public McpService(VaultStore vault, Func<string, int, string, HostKeyTrust> check, JumpResolver jumps)
+    public McpService(VaultStore vault, Func<string, int, string, HostKeyTrust> check, JumpResolver jumps, HistoryStore? history = null)
     {
         _vault = vault;
         _check = check;
         _jumps = jumps;
+        _history = history;
         _handler = new McpHandler(this);
     }
+
+    public bool IsReadOnly { get { lock (_gate) return _readOnly; } }
 
     /// <summary>Last start error (e.g. port already in use), shown in the settings.</summary>
     public string? Error { get; private set; }
@@ -41,6 +47,8 @@ public sealed class McpService : IMcpBackend, IDisposable
     {
         lock (_gate)
         {
+            _readOnly = settings.McpReadOnly;
+            _allowedWorkspaces = new HashSet<string>(settings.McpAllowedWorkspaces ?? new List<string>(), StringComparer.OrdinalIgnoreCase);
             if (settings.McpEnabled && _listener != null && _port == settings.McpPort && _token == settings.McpToken) return;
             StopLocked();
             Error = null;
@@ -156,7 +164,9 @@ public sealed class McpService : IMcpBackend, IDisposable
 
     public Task<IReadOnlyList<McpHost>> ListHostsAsync(string query)
     {
+        var allowed = AllowedSnapshot();
         var hosts = Unlocked().List()
+            .Where(s => AppSettings.IsWorkspaceAllowed(s.Workspace, allowed))
             .Where(s => query.Length == 0 || $"{s.Name} {s.Host} {s.Workspace} {s.Group} {s.Os} {string.Join(" ", s.Tags)}".Contains(query, StringComparison.OrdinalIgnoreCase))
             .Select(s => new McpHost(s.Id, s.Name, s.Host, s.Port, s.Protocol.ToString().ToLowerInvariant(), s.Workspace, s.Group, string.Join(",", s.Tags), s.Os, s.Notes))
             .ToList();
@@ -165,52 +175,61 @@ public sealed class McpService : IMcpBackend, IDisposable
 
     public async Task<McpExecResult> RunCommandAsync(string host, string command, int timeoutSeconds, CancellationToken ct)
     {
+        if (IsReadOnly) throw new InvalidOperationException("The MCP server is in read-only mode.");
         var (server, key) = Resolve(host);
-        var r = await SshExec.RunAsync(server, key, _check, _jumps, command, TimeSpan.FromSeconds(timeoutSeconds), ct);
-        return new McpExecResult(r.StdOut, r.StdErr, r.ExitCode, r.TimedOut);
+        return await AuditAsync(server, $"run_command: {Snip(command, 80)}", async () =>
+        {
+            var r = await SshExec.RunAsync(server, key, _check, _jumps, command, TimeSpan.FromSeconds(timeoutSeconds), ct);
+            return new McpExecResult(r.StdOut, r.StdErr, r.ExitCode, r.TimedOut);
+        });
     }
 
     public async Task<string> ReadFileAsync(string host, string path, int? startLine, int? maxLines, CancellationToken ct)
     {
-        var (sftp, home) = await OpenSftpAsync(host, ct);
+        var (sftp, home, server) = await OpenSftpAsync(host, ct);
         using (sftp)
-        {
-            var full = SftpSession.Normalize(home, path);
-            if (startLine != null || maxLines != null)
-                return await sftp.ReadTextRangeAsync(full, startLine ?? 1, maxLines ?? 200, ct);
-            return (await sftp.ReadTextAsync(full, ct)).Content;
-        }
+            return await AuditAsync(server, $"read_file: {path}", async () =>
+            {
+                var full = SftpSession.Normalize(home, path);
+                if (startLine != null || maxLines != null)
+                    return await sftp.ReadTextRangeAsync(full, startLine ?? 1, maxLines ?? 200, ct);
+                return (await sftp.ReadTextAsync(full, ct)).Content;
+            });
     }
 
     public async Task WriteFileAsync(string host, string path, string content, CancellationToken ct)
     {
-        var (sftp, home) = await OpenSftpAsync(host, ct);
+        if (IsReadOnly) throw new InvalidOperationException("The MCP server is in read-only mode.");
+        var (sftp, home, server) = await OpenSftpAsync(host, ct);
         using (sftp)
-        {
-            var full = SftpSession.Normalize(home, path);
-            var (lineEnding, bom) = await sftp.TryDetectFormatAsync(full, ct);
-            await sftp.WriteTextAsync(full, content, lineEnding, bom, 0, 0, force: true, ct);
-        }
+            await AuditAsync(server, $"write_file: {path}", async () =>
+            {
+                var full = SftpSession.Normalize(home, path);
+                var (lineEnding, bom) = await sftp.TryDetectFormatAsync(full, ct);
+                await sftp.WriteTextAsync(full, content, lineEnding, bom, 0, 0, force: true, ct);
+                return 0;
+            });
     }
 
     public async Task<IReadOnlyList<McpFileEntry>> ListDirectoryAsync(string host, string path, CancellationToken ct)
     {
-        var (sftp, _) = await OpenSftpAsync(host, ct);
+        var (sftp, _, server) = await OpenSftpAsync(host, ct);
         using (sftp)
-        {
-            var listing = await sftp.ListAsync(path, ct);
-            return listing.Entries.Select(e => new McpFileEntry(e.Name, e.IsDir, e.Size)).ToList();
-        }
+            return await AuditAsync(server, $"list_directory: {path}", async () =>
+            {
+                var listing = await sftp.ListAsync(path, ct);
+                return (IReadOnlyList<McpFileEntry>)listing.Entries.Select(e => new McpFileEntry(e.Name, e.IsDir, e.Size)).ToList();
+            });
     }
 
-    private async Task<(SftpSession Sftp, string Home)> OpenSftpAsync(string host, CancellationToken ct)
+    private async Task<(SftpSession Sftp, string Home, ServerEntry Server)> OpenSftpAsync(string host, CancellationToken ct)
     {
         var (server, key) = Resolve(host);
         var sftp = new SftpSession(server, key, _check, _jumps);
         try
         {
             var home = await sftp.ConnectAsync(ct);
-            return (sftp, home);
+            return (sftp, home, server);
         }
         catch
         {
@@ -219,11 +238,39 @@ public sealed class McpService : IMcpBackend, IDisposable
         }
     }
 
+    private async Task<T> AuditAsync<T>(ServerEntry server, string action, Func<Task<T>> work)
+    {
+        var hid = _history?.Begin(server, "mcp");
+        try
+        {
+            var result = await work();
+            if (hid != null) _history!.End(hid, true, action);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            if (hid != null) _history!.End(hid, false, $"{action} — {ex.Message}");
+            throw;
+        }
+    }
+
+    private static string Snip(string s, int max)
+    {
+        s = s.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        return s.Length <= max ? s : s[..max] + "…";
+    }
+
+    private HashSet<string>? AllowedSnapshot()
+    {
+        lock (_gate) return _allowedWorkspaces.Count == 0 ? null : new HashSet<string>(_allowedWorkspaces, StringComparer.OrdinalIgnoreCase);
+    }
+
     private VaultStore Unlocked() => _vault.IsUnlocked ? _vault : throw new InvalidOperationException("The vault is locked. Unlock MultiServerView first.");
 
     private (ServerEntry Server, KeyEntry? Key) Resolve(string reference)
     {
-        var all = Unlocked().List();
+        var allowed = AllowedSnapshot();
+        var all = Unlocked().List().Where(s => AppSettings.IsWorkspaceAllowed(s.Workspace, allowed)).ToList();
         var matches = all.Where(s => s.Id == reference).ToList();
         if (matches.Count == 0) matches = all.Where(s => s.Name.Equals(reference, StringComparison.OrdinalIgnoreCase)).ToList();
         if (matches.Count == 0) throw new KeyNotFoundException($"No host named \"{reference}\". Use list_hosts to see the available hosts.");

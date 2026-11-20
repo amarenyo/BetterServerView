@@ -7,6 +7,7 @@ namespace MultiServerView.Core.Mcp;
 /// <summary>What the MCP tools do. Implemented by the app on top of the vault and the SSH/SFTP code.</summary>
 public interface IMcpBackend
 {
+    bool IsReadOnly => false;
     Task<IReadOnlyList<McpHost>> ListHostsAsync(string query);
     Task<McpExecResult> RunCommandAsync(string host, string command, int timeoutSeconds, CancellationToken ct);
     Task<string> ReadFileAsync(string host, string path, int? startLine, int? maxLines, CancellationToken ct);
@@ -126,6 +127,9 @@ public sealed class McpHandler(IMcpBackend backend)
 
         try
         {
+            if (backend.IsReadOnly && name is "run_command" or "write_file")
+                return Result("The MCP server is in read-only mode. Disable read-only mode in MultiServerView (AI tools) to run commands or write files.", true);
+
             string text;
             switch (name)
             {
@@ -205,7 +209,7 @@ public sealed class McpHandler(IMcpBackend backend)
         ["isError"] = isError
     };
 
-    private static JsonArray Tools()
+    private JsonArray Tools()
     {
         static JsonObject Prop(string type, string description) => new() { ["type"] = type, ["description"] = description };
         static JsonObject Ann(bool readOnly, bool destructive, bool idempotent, bool openWorld) => new()
@@ -223,7 +227,7 @@ public sealed class McpHandler(IMcpBackend backend)
             ["inputSchema"] = new JsonObject { ["type"] = "object", ["properties"] = props, ["required"] = new JsonArray(required.Select(r => (JsonNode)JsonValue.Create(r)!).ToArray()) }
         };
         JsonObject host() => Prop("string", "Host name or id from list_hosts."); // a JSON node can only have one parent
-        return new JsonArray(
+        var tools = new JsonArray(
             Tool("list_hosts", "List the servers saved in MultiServerView (no passwords).",
                 Ann(readOnly: true, destructive: false, idempotent: true, openWorld: false),
                 new JsonObject { ["query"] = Prop("string", "Optional text to filter by name, address, workspace, OS or tag.") }),
@@ -245,6 +249,14 @@ public sealed class McpHandler(IMcpBackend backend)
             Tool("list_directory", "List a directory on an SSH host over SFTP.",
                 Ann(readOnly: true, destructive: false, idempotent: true, openWorld: true),
                 new JsonObject { ["host"] = host(), ["path"] = Prop("string", "Directory, default is the home folder.") }, "host"));
+        if (backend.IsReadOnly)
+        {
+            // read-only mode: the tools that change something are not even offered
+            foreach (var name in new[] { "run_command", "write_file" })
+                for (var i = tools.Count - 1; i >= 0; i--)
+                    if (tools[i]?["name"]?.GetValue<string>() == name) tools.RemoveAt(i);
+        }
+        return tools;
     }
 }
 

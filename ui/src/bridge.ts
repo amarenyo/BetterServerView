@@ -40,6 +40,7 @@ export type HostEvent =
   | { event: 'sftp.progress'; sessionId: string; transferId: string; name: string; done: number; total: number; finished: boolean }
   | { event: 'sftp.externalSaved'; sessionId: string; name: string; error: string | null }
   | { event: 'window.state'; maximized: boolean }
+  | { event: 'mcp.status'; running: boolean; error: string | null }
   | { event: 'vault.changed' };
 
 const listeners = new Set<(e: HostEvent) => void>();
@@ -180,7 +181,7 @@ function loadMock(): MockState {
     snippets: [],
     forwards: [],
     history: [],
-    settings: { sshKeepAliveSeconds: 30, sshConnectTimeoutSeconds: 15, rdpColorDepth: 32, rdpClipboard: true, rdpDrives: false, rdpDynamicResize: true, rdpWarnOnCertificate: false, mcpEnabled: false, mcpPort: 7676, mcpToken: '' },
+    settings: { sshKeepAliveSeconds: 30, sshConnectTimeoutSeconds: 15, rdpColorDepth: 32, rdpClipboard: true, rdpDrives: false, rdpDynamicResize: true, rdpWarnOnCertificate: false, mcpEnabled: false, mcpPort: 7676, mcpToken: '', mcpReadOnly: false, mcpAllowedWorkspaces: [] },
     source: { configured: false, mode: 'local', folder: '', url: '', anonKey: '', email: '', hasPassword: false, lastSaved: null },
   };
 }

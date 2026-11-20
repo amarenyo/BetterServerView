@@ -65,7 +65,9 @@ const CLIENTS: Client[] = [
   },
 ];
 
-export function McpPage({ toast }: { toast: (msg: string, kind?: 'ok' | 'error') => void }) {
+const NO_WORKSPACE = '(none)';
+
+export function McpPage({ toast, workspaces = [] }: { toast: (msg: string, kind?: 'ok' | 'error') => void; workspaces?: string[] }) {
   const [host, setHost] = useState<HostSettings | null>(null);
   const [status, setStatus] = useState<{ running: boolean; error: string | null } | null>(null);
   const [client, setClient] = useState('claude-code');
@@ -227,6 +229,75 @@ export function McpPage({ toast }: { toast: (msg: string, kind?: 'ok' | 'error')
                 </div>
                 <div className="set-row">
                   <div className="set-label">
+                    <div className="set-title">Read-only mode</div>
+                    <div className="muted small">Allows listing hosts and reading files/folders only. Blocks running commands and writing files.</div>
+                  </div>
+                  <div className="set-control">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={host.mcpReadOnly}
+                      aria-label="Read-only mode"
+                      className={'switch' + (host.mcpReadOnly ? ' on' : '')}
+                      onClick={() => update({ mcpReadOnly: !host.mcpReadOnly }, true)}
+                    >
+                      <i />
+                    </button>
+                  </div>
+                </div>
+                <div className="set-row">
+                  <div className="set-label">
+                    <div className="set-title">Allowed workspaces</div>
+                    <div className="muted small">Restrict which hosts the AI can see and access over MCP.</div>
+                  </div>
+                  <div className="set-control" style={{ flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
+                    <div className="seg slim fit">
+                      <button
+                        type="button"
+                        className={host.mcpAllowedWorkspaces.length === 0 ? 'on' : ''}
+                        onClick={() => update({ mcpAllowedWorkspaces: [] }, true)}
+                      >
+                        All workspaces
+                      </button>
+                      <button
+                        type="button"
+                        className={host.mcpAllowedWorkspaces.length > 0 ? 'on' : ''}
+                        onClick={() =>
+                          host.mcpAllowedWorkspaces.length === 0 &&
+                          update({ mcpAllowedWorkspaces: [workspaces[0] ?? NO_WORKSPACE] }, true)
+                        }
+                      >
+                        Selected only
+                      </button>
+                    </div>
+                    {host.mcpAllowedWorkspaces.length > 0 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, justifyContent: 'flex-end' }}>
+                        {[NO_WORKSPACE, ...workspaces, ...host.mcpAllowedWorkspaces.filter((w) => w !== NO_WORKSPACE && !workspaces.includes(w))].map(
+                          (ws) => {
+                            const checked = host.mcpAllowedWorkspaces.includes(ws);
+                            return (
+                              <label key={ws} className="row-inline small" style={{ cursor: 'pointer' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => {
+                                    const next = checked
+                                      ? host.mcpAllowedWorkspaces.filter((x) => x !== ws)
+                                      : [...host.mcpAllowedWorkspaces, ws];
+                                    if (next.length > 0) update({ mcpAllowedWorkspaces: next }, true);
+                                  }}
+                                />
+                                {ws === NO_WORKSPACE ? 'No workspace' : ws}
+                              </label>
+                            );
+                          },
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="set-row">
+                  <div className="set-label">
                     <div className="set-title">Token</div>
                     <div className="muted small">Like a password for the AI tool. To get a new one, switch the server off and on again.</div>
                   </div>
@@ -302,8 +373,17 @@ export function McpPage({ toast }: { toast: (msg: string, kind?: 'ok' | 'error')
                 </p>
               ) : null}
               <p className="muted small" style={{ marginTop: 12 }}>
-                Tools the AI gets: <code>list_hosts</code>, <code>run_command</code>, <code>read_file</code>, <code>write_file</code>, <code>list_directory</code>. SSH
-                hosts only; MultiServerView itself never sends your saved passwords or keys to the AI.
+                Tools the AI gets:{' '}
+                {host.mcpReadOnly ? (
+                  <>
+                    <code>list_hosts</code>, <code>read_file</code>, <code>list_directory</code> (read-only mode)
+                  </>
+                ) : (
+                  <>
+                    <code>list_hosts</code>, <code>run_command</code>, <code>read_file</code>, <code>write_file</code>, <code>list_directory</code>
+                  </>
+                )}
+                . SSH hosts only; MultiServerView itself never sends your saved passwords or keys to the AI.
               </p>
             </section>
           )}

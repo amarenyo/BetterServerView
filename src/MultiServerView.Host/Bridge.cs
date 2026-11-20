@@ -52,7 +52,7 @@ public sealed class Bridge : IDisposable
         _rdp = rdp;
         _emit = emit;
         _auto = new AutoSync(vault, source, emit, CloseEverythingForReplacedVault);
-        _mcp = new McpService(vault, CheckHost, Jumps);
+        _mcp = new McpService(vault, CheckHost, Jumps, history);
         _mcp.Apply(settings.Current);
     }
 
@@ -557,6 +557,7 @@ public sealed class Bridge : IDisposable
             {
                 var saved = _settings.Save(p.Deserialize<AppSettings>(Json.Options) ?? throw new ArgumentException("Invalid settings."));
                 _mcp.Apply(saved);
+                _emit(new { @event = "mcp.status", running = _mcp.Running, error = _mcp.Error });
                 return saved;
             }
             case "app.info":
