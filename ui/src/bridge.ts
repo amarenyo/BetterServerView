@@ -505,6 +505,7 @@ async function callMock(method: string, params: any): Promise<unknown> {
     case 'mcp.status':
       return { running: false, error: null };
     case 'mcp.configure':
+      if (params.action === 'statusAll') return {};
       if (params.action === 'status') return { supported: false, path: '', exists: false, configured: false, upToDate: false };
       return onlyNative('Configuring AI tools');
     case 'app.info':
@@ -968,8 +969,9 @@ export const api = {
   rdpExternal: (serverId: string) => call<void>('rdp.external', { serverId }),
   teamviewerOpen: (serverId: string) => call<void>('teamviewer.open', { serverId }),
   mcpStatus: () => call<{ running: boolean; error: string | null }>('mcp.status'),
-  mcpConfigure: (client: string, action: 'status' | 'add' | 'remove') =>
-    call<McpConfigStatus>('mcp.configure', { client, action }),
+  mcpConfigure: (client: string, action: 'status' | 'add' | 'remove', workspace?: string) =>
+    call<McpConfigStatus>('mcp.configure', { client, action, ...(workspace ? { workspace } : {}) }),
+  mcpConfigureAll: () => call<Record<string, McpConfigStatus>>('mcp.configure', { client: '', action: 'statusAll' }),
   updateCheck: () => call<UpdateStatus>('update.check'),
   updateInstall: () => call<void>('update.install'),
 

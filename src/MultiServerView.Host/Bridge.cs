@@ -568,15 +568,18 @@ public sealed class Bridge : IDisposable
             {
                 var client = Str(p, "client");
                 var action = Str(p, "action");
+                var workspace = Opt(p, "workspace");
+                string? ws = workspace.Length > 0 ? workspace : null;
                 var s = _settings.Current;
                 var url = $"http://127.0.0.1:{s.McpPort}/mcp";
                 return action switch
                 {
-                    "status" => McpClientConfig.Status(client, url, s.McpToken),
+                    "status" => McpClientConfig.Status(client, url, s.McpToken, workspaceDir: ws),
+                    "statusAll" => McpClientConfig.StatusAll(url, s.McpToken),
                     "add" => s.McpEnabled && s.McpToken.Length > 0
-                        ? McpClientConfig.Add(client, url, s.McpToken)
+                        ? McpClientConfig.Add(client, url, s.McpToken, workspaceDir: ws)
                         : throw new InvalidOperationException("Enable the MCP server first."),
-                    "remove" => McpClientConfig.Remove(client),
+                    "remove" => McpClientConfig.Remove(client, workspaceDir: ws),
                     _ => throw new ArgumentException("Unknown action: " + action)
                 };
             }
