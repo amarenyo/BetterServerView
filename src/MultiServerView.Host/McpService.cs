@@ -110,9 +110,9 @@ public sealed class McpService : IMcpBackend, IDisposable
             if (!TokenOk(request.Headers["Authorization"], token)) { response.StatusCode = 401; response.AddHeader("WWW-Authenticate", "Bearer"); return; }
             if (request.HttpMethod != "POST") { response.AddHeader("Allow", "POST"); response.StatusCode = 405; return; }
 
-            using var reader = new StreamReader(request.InputStream, Encoding.UTF8);
-            var body = await reader.ReadToEndAsync(ct);
-            if (body.Length > 5_000_000) { response.StatusCode = 413; return; }
+            if (request.ContentLength64 > 5_000_000) { response.StatusCode = 413; return; }
+            var body = await ReadBodyLimitedAsync(request.InputStream, 5_000_000, ct);
+            if (body == null) { response.StatusCode = 413; return; }
 
             var answer = await _handler.HandleAsync(body, ct);
             if (answer == null) { response.StatusCode = 202; response.ContentLength64 = 0; return; }
@@ -128,6 +128,19 @@ public sealed class McpService : IMcpBackend, IDisposable
         finally
         {
             try { response.Close(); } catch (Exception) { /* connection already gone */ }
+        }
+    }
+
+    private static async Task<string?> ReadBodyLimitedAsync(Stream stream, int maxBytes, CancellationToken ct)
+    {
+        var buffer = new byte[16 * 1024];
+        using var ms = new MemoryStream();
+        while (true)
+        {
+            var n = await stream.ReadAsync(buffer, ct);
+            if (n == 0) return Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
+            if (ms.Length + n > maxBytes) return null;
+            ms.Write(buffer, 0, n);
         }
     }
 
