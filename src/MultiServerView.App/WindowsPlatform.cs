@@ -114,10 +114,16 @@ internal sealed class WindowsPlatform : IHostPlatform
 
     public async Task InstallUpdateAsync(string setupUrl, string version)
     {
-        var file = Path.Combine(Path.GetTempPath(), "MultiServerView-Setup-" + version + ".exe");
+        if (!Core.Update.UpdateChecker.IsGitHubUrl(setupUrl, Core.Update.UpdateChecker.Repository))
+            throw new InvalidOperationException("Refusing to download update from an untrusted URL.");
+        var safeVersion = Core.Update.UpdateChecker.SanitizeVersionForFileName(version);
+        var file = Path.Combine(Path.GetTempPath(), "MultiServerView-Setup-" + safeVersion + ".exe");
         using (var response = await Http.GetAsync(setupUrl, HttpCompletionOption.ResponseHeadersRead))
         {
             response.EnsureSuccessStatusCode();
+            var finalUrl = response.RequestMessage?.RequestUri?.ToString() ?? "";
+            if (!Core.Update.UpdateChecker.IsGitHubUrl(finalUrl, Core.Update.UpdateChecker.Repository))
+                throw new InvalidOperationException("Update download redirected to an untrusted host.");
             await using var fs = File.Create(file);
             await response.Content.CopyToAsync(fs);
         }
