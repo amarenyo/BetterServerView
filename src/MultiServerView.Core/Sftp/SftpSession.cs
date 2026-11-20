@@ -64,8 +64,9 @@ public sealed class SftpSession : IDisposable
         return client.WorkingDirectory;
     }
 
-    public Task<BrowseResult> ListAsync(string path) => Task.Run(() =>
+    public Task<BrowseResult> ListAsync(string path, CancellationToken ct = default) => Task.Run(() =>
     {
+        ct.ThrowIfCancellationRequested();
         var client = Client;
         var full = Normalize(client.WorkingDirectory, path);
         var entries = client.ListDirectory(full)
@@ -75,7 +76,7 @@ public sealed class SftpSession : IDisposable
             .ThenBy(e => e.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
         return new BrowseResult(full, ParentOf(full), entries);
-    });
+    }, ct);
 
     public Task MakeDirAsync(string path) => Task.Run(() => Client.CreateDirectory(path));
 
@@ -307,8 +308,9 @@ public sealed class SftpSession : IDisposable
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     /// <summary>Reads a UTF-8 text file for editing. Binary files and very large files are rejected.</summary>
-    public Task<RemoteText> ReadTextAsync(string path) => Task.Run(() =>
+    public Task<RemoteText> ReadTextAsync(string path, CancellationToken ct = default) => Task.Run(() =>
     {
+        ct.ThrowIfCancellationRequested();
         var client = Client;
         var attrs = client.GetAttributes(path);
         if (attrs.IsDirectory) throw new InvalidOperationException("A folder cannot be edited.");
@@ -330,14 +332,144 @@ public sealed class SftpSession : IDisposable
 
         var crlf = text.Contains("\r\n", StringComparison.Ordinal);
         return new RemoteText(crlf ? text.Replace("\r\n", "\n") : text, crlf ? "crlf" : "lf", hasBom, bytes.Length, UnixSeconds(attrs.LastWriteTimeUtc));
-    });
+    }, ct);
+
+    /// <summary>Reads a 1-based line range from a UTF-8 text file (works on files larger than 2 MB).</summary>
+    public Task<string> ReadTextRangeAsync(string path, int startLine, int maxLines, CancellationToken ct = default) => Task.Run(() =>
+    {
+        ct.ThrowIfCancellationRequested();
+        var client = Client;
+        var attrs = client.GetAttributes(path);
+        if (attrs.IsDirectory) throw new InvalidOperationException("A folder cannot be edited.");
+        using var stream = client.OpenRead(path);
+        return ReadLineRange(stream, startLine, maxLines, ct);
+    }, ct);
+
+    /// <summary>Detects line ending ("crlf" or "lf") and UTF-8 BOM of an existing remote file, or ("lf", false) otherwise.</summary>
+    public Task<(string LineEnding, bool Bom)> TryDetectFormatAsync(string path, CancellationToken ct = default) => Task.Run(() =>
+    {
+        ct.ThrowIfCancellationRequested();
+        var client = Client;
+        try
+        {
+            if (!client.Exists(path)) return ("lf", false);
+            using var stream = client.OpenRead(path);
+            var buf = new byte[8192];
+            var total = 0;
+            while (total < buf.Length)
+            {
+                ct.ThrowIfCancellationRequested();
+                var n = stream.Read(buf, total, buf.Length - total);
+                if (n == 0) break;
+                total += n;
+            }
+            return DetectTextFormat(buf.AsSpan(0, total));
+        }
+        catch (Exception ex) when (ex is Renci.SshNet.Common.SshException or IOException)
+        {
+            return ("lf", false);
+        }
+    }, ct);
+
+    public static (string LineEnding, bool Bom) DetectTextFormat(ReadOnlySpan<byte> sample)
+    {
+        var bom = sample.Length >= 3 && sample[0] == 0xEF && sample[1] == 0xBB && sample[2] == 0xBF;
+        var crlf = sample.IndexOf("\r\n"u8) >= 0;
+        return (crlf ? "crlf" : "lf", bom);
+    }
+
+    public static string ReadLineRange(Stream stream, int startLine, int maxLines, CancellationToken ct = default)
+    {
+        if (startLine < 1) startLine = 1;
+        if (maxLines < 1) maxLines = 1;
+        var endLine = (long)startLine + maxLines;
+
+        var decoder = StrictUtf8.GetDecoder();
+        var byteBuf = new byte[16384];
+        var charBuf = new char[16384];
+        var sb = new StringBuilder();
+        var line = new StringBuilder();
+        long lineNo = 1;
+        var collected = 0;
+        var atStart = true;
+        var pendingCr = false;
+        var truncated = false;
+        var keepReading = true;
+
+        bool EmitLine()
+        {
+            if (lineNo >= startLine && lineNo < endLine)
+            {
+                if (collected > 0)
+                {
+                    if (sb.Length + 1 > MaxEditBytes) { truncated = true; return false; }
+                    sb.Append('\n');
+                }
+                var take = Math.Min(line.Length, (int)MaxEditBytes - sb.Length);
+                sb.Append(line, 0, take);
+                collected++;
+                if (take < line.Length) { truncated = true; return false; }
+            }
+            line.Clear();
+            lineNo++;
+            return lineNo < endLine;
+        }
+
+        while (keepReading)
+        {
+            ct.ThrowIfCancellationRequested();
+            var n = stream.Read(byteBuf, 0, byteBuf.Length);
+            if (n > 0 && Array.IndexOf(byteBuf, (byte)0, 0, n) >= 0)
+                throw new InvalidOperationException("This is not a text file (it contains binary data).");
+
+            int charCount;
+            try
+            {
+                charCount = decoder.GetChars(byteBuf, 0, n, charBuf, 0, flush: n == 0);
+            }
+            catch (DecoderFallbackException)
+            {
+                throw new InvalidOperationException("The file is not UTF-8 encoded and cannot be edited safely here.");
+            }
+
+            for (var i = 0; i < charCount; i++)
+            {
+                var ch = charBuf[i];
+                if (atStart)
+                {
+                    atStart = false;
+                    if (ch == '\uFEFF') continue;
+                }
+                if (pendingCr)
+                {
+                    pendingCr = false;
+                    if (!EmitLine()) { keepReading = false; break; }
+                    if (ch == '\n') continue;
+                }
+                if (ch == '\r') { pendingCr = true; continue; }
+                if (ch == '\n')
+                {
+                    if (!EmitLine()) { keepReading = false; break; }
+                    continue;
+                }
+                if (lineNo >= startLine && line.Length < MaxEditBytes + 32) line.Append(ch);
+            }
+
+            if (n == 0) break;
+        }
+
+        if (keepReading && (pendingCr || line.Length > 0)) EmitLine();
+        if (truncated) sb.Append("\n[output truncated]");
+        return sb.ToString();
+    }
 
     /// <summary>
     /// Writes the edited text back (line ending and BOM as in the original; permissions and owner stay because the same file
     /// is overwritten). Without <paramref name="force"/> it aborts if the file was changed since it was read.
     /// </summary>
-    public Task<(long Modified, long Size)> WriteTextAsync(string path, string content, string lineEnding, bool bom, long expectedModified, long expectedSize, bool force) => Task.Run(() =>
+    public Task<(long Modified, long Size)> WriteTextAsync(string path, string content, string lineEnding, bool bom, long expectedModified, long expectedSize, bool force, CancellationToken ct = default) => Task.Run(() =>
     {
+        ct.ThrowIfCancellationRequested();
         var client = Client;
         if (!force)
         {
@@ -351,7 +483,7 @@ public sealed class SftpSession : IDisposable
         using (var ms = new MemoryStream(bytes)) client.UploadFile(ms, path, true);
         var written = client.GetAttributes(path);
         return (UnixSeconds(written.LastWriteTimeUtc), written.Size);
-    });
+    }, ct);
 
     private static long UnixSeconds(DateTime utc) => new DateTimeOffset(DateTime.SpecifyKind(utc, DateTimeKind.Utc)).ToUnixTimeSeconds();
 
