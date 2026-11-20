@@ -338,12 +338,24 @@ public sealed class Bridge : IDisposable
                 var current = AppVersion;
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
                 var info = await UpdateChecker.CheckAsync(_http, current, cts.Token);
+                _cachedUpdate = info != null ? (info, DateTimeOffset.UtcNow) : null;
                 return new { current, available = info != null, version = info?.Version ?? "", notes = info?.Notes ?? "", pageUrl = info?.PageUrl ?? "", canInstall = info?.SetupUrl != null && _platform.CanSelfUpdate };
             }
             case "update.install":
             {
-                var info = await UpdateChecker.CheckAsync(_http, AppVersion);
-                if (info?.SetupUrl == null || !UpdateChecker.IsGitHubUrl(info.SetupUrl)) throw new InvalidOperationException("No installer found for the new version. Download it from the releases page.");
+                var cached = _cachedUpdate;
+                UpdateInfo? info;
+                if (cached is { } c && DateTimeOffset.UtcNow - c.At < TimeSpan.FromMinutes(10))
+                {
+                    info = c.Info;
+                }
+                else
+                {
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                    info = await UpdateChecker.CheckAsync(_http, AppVersion, cts.Token);
+                    _cachedUpdate = info != null ? (info, DateTimeOffset.UtcNow) : null;
+                }
+                if (info?.SetupUrl == null || !UpdateChecker.IsGitHubUrl(info.SetupUrl, UpdateChecker.Repository)) throw new InvalidOperationException("No installer found for the new version. Download it from the releases page.");
                 if (!_platform.CanSelfUpdate) throw new InvalidOperationException("This copy cannot update itself. Download the new version from the releases page.");
                 await _platform.InstallUpdateAsync(info.SetupUrl, info.Version);
                 return null;
