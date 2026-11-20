@@ -39,6 +39,7 @@ public sealed class Bridge : IDisposable
     private readonly PortForwardManager _forwards = new();
     private readonly WebSocketTcpProxy _vncProxy = new();
     private readonly McpService _mcp;
+    private (UpdateInfo Info, DateTimeOffset At)? _cachedUpdate;
 
     public Bridge(VaultStore vault, SourceService source, HistoryStore history, AppSettingsStore settings, IRdpController rdp, Action<object> emit, IHostPlatform platform)
     {
@@ -335,7 +336,8 @@ public sealed class Bridge : IDisposable
             case "update.check":
             {
                 var current = AppVersion;
-                var info = await UpdateChecker.CheckAsync(_http, current);
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                var info = await UpdateChecker.CheckAsync(_http, current, cts.Token);
                 return new { current, available = info != null, version = info?.Version ?? "", notes = info?.Notes ?? "", pageUrl = info?.PageUrl ?? "", canInstall = info?.SetupUrl != null && _platform.CanSelfUpdate };
             }
             case "update.install":
