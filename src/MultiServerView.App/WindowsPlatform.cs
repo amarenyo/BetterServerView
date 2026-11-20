@@ -26,8 +26,8 @@ internal sealed class WindowsPlatform : IHostPlatform
     public bool CustomTitleBar => true;
     public ISecretProtector Secrets { get; } = new DpapiProtector();
 
-    /// <summary>Installed by the setup wizard (the uninstaller sits next to the exe) - otherwise it is the portable ZIP.</summary>
-    public bool CanSelfUpdate => File.Exists(Path.Combine(AppContext.BaseDirectory, "unins000.exe"));
+    /// <summary>Installed by the setup wizard (an uninstaller sits next to the exe) - otherwise it is the portable ZIP.</summary>
+    public bool CanSelfUpdate => Directory.EnumerateFiles(AppContext.BaseDirectory, "unins*.exe").Any();
 
     public Task<string?> PickSavePathAsync(string suggestedName) => _pickSavePath(suggestedName);
     public Task<string?> PickFolderAsync(string description) => _pickFolder(description);
@@ -127,8 +127,8 @@ internal sealed class WindowsPlatform : IHostPlatform
             await using var fs = File.Create(file);
             await response.Content.CopyToAsync(fs);
         }
-        // Inno Setup: silent, closes this app, starts the new version when done.
-        Process.Start(new ProcessStartInfo(file, "/SILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS /NOCANCEL") { UseShellExecute = true });
+        // Inno Setup: silent, closes this app, starts the new version when done (/relaunch=1 triggers the silent [Run] entry).
+        Process.Start(new ProcessStartInfo(file, "/SILENT /CLOSEAPPLICATIONS /NOCANCEL /relaunch=1") { UseShellExecute = true });
         _window("close");
     }
 }
