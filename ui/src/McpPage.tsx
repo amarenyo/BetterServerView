@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, isNative, type McpConfigStatus } from './bridge';
 import { IconCheck, IconCopy } from './Icons';
 import type { HostSettings } from './types';
+import { getUiSettings, onUiSettings, setUiSettings } from './uiSettings';
 
 interface Client {
   id: string;
@@ -78,7 +79,10 @@ export function McpPage({ toast, workspaces = [] }: { toast: (msg: string, kind?
   const [portText, setPortText] = useState('');
   const [cfgBusy, setCfgBusy] = useState(false);
   const [cfgNote, setCfgNote] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+  const [ui, setUi] = useState(getUiSettings);
   const timer = useRef<number | undefined>(undefined);
+
+  useEffect(() => onUiSettings(setUi), []);
 
   const loadStatus = useCallback(() => void api.mcpStatus().then(setStatus).catch(() => undefined), []);
   const loadAllCfg = useCallback(
@@ -356,6 +360,36 @@ export function McpPage({ toast, workspaces = [] }: { toast: (msg: string, kind?
                     </button>
                   </div>
                 </div>
+                {ui.autoLockMinutes > 0 && (
+                  <>
+                    <div className="set-row">
+                      <div className="set-label">
+                        <div className="set-title">Keep unlocked during MCP activity</div>
+                        <div className="muted small">
+                          Auto-lock is set to {ui.autoLockMinutes} min (Settings → Security). Enable this to reset the inactivity timer whenever an AI tool calls the
+                          MCP server.
+                        </div>
+                      </div>
+                      <div className="set-control">
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={ui.mcpKeepUnlocked}
+                          aria-label="Keep unlocked during MCP activity"
+                          className={'switch' + (ui.mcpKeepUnlocked ? ' on' : '')}
+                          onClick={() => setUiSettings({ mcpKeepUnlocked: !ui.mcpKeepUnlocked })}
+                        >
+                          <i />
+                        </button>
+                      </div>
+                    </div>
+                    {!ui.mcpKeepUnlocked && (
+                      <div className="notice small" style={{ marginTop: 10 }}>
+                        Auto-lock is enabled ({ui.autoLockMinutes} min). Once the vault locks, AI tool calls will fail until you unlock MultiServerView again.
+                      </div>
+                    )}
+                  </>
+                )}
               </>
             )}
           </section>

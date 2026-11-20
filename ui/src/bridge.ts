@@ -41,6 +41,7 @@ export type HostEvent =
   | { event: 'sftp.externalSaved'; sessionId: string; name: string; error: string | null }
   | { event: 'window.state'; maximized: boolean }
   | { event: 'mcp.status'; running: boolean; error: string | null }
+  | { event: 'mcp.activity' }
   | { event: 'vault.changed' };
 
 const listeners = new Set<(e: HostEvent) => void>();
