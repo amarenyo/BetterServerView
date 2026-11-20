@@ -258,25 +258,28 @@ public sealed class SftpSession : IDisposable
     }
 
     private static void CollectRemote(SftpClient client, string remoteDir, string localDir,
-        List<(string, string, long)> files, List<string> dirs)
+        List<(string, string, long)> files, List<string> dirs, int depth = 0)
     {
+        if (depth > 64) return; // protects against link loops
         foreach (var f in client.ListDirectory(remoteDir))
         {
             if (f.Name is "." or "..") continue;
+            if (f.IsSymbolicLink) continue;
             var local = SafeLocalChildPath(localDir, f.Name);
             if (f.IsDirectory)
             {
                 dirs.Add(local);
-                CollectRemote(client, f.FullName, local, files, dirs);
+                CollectRemote(client, f.FullName, local, files, dirs, depth + 1);
             }
             else files.Add((f.FullName, local, f.Length));
         }
     }
 
-    private static void DeleteRecursive(SftpClient client, string path)
+    private static void DeleteRecursive(SftpClient client, string path, int depth = 0)
     {
-        var attrs = client.GetAttributes(path);
-        if (!attrs.IsDirectory)
+        if (depth > 64) throw new InvalidOperationException("Folder nesting is too deep to delete safely.");
+        var item = client.Get(path);
+        if (!item.IsDirectory || item.IsSymbolicLink)
         {
             client.DeleteFile(path);
             return;
@@ -284,7 +287,7 @@ public sealed class SftpSession : IDisposable
         foreach (var f in client.ListDirectory(path))
         {
             if (f.Name is "." or "..") continue;
-            if (f.IsDirectory) DeleteRecursive(client, f.FullName);
+            if (f.IsDirectory && !f.IsSymbolicLink) DeleteRecursive(client, f.FullName, depth + 1);
             else client.DeleteFile(f.FullName);
         }
         client.DeleteDirectory(path);
