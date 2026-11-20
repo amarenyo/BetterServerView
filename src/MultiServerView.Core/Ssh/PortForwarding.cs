@@ -34,17 +34,25 @@ public sealed class ForwardRunner : IDisposable
             throw new ArgumentException("Destination address and port are missing.");
 
         var tunnel = await JumpTunnel.OpenAsync(_server, _jumps, _check);
-        var client = new SshClient(SshConnector.BuildConnectionInfo(_server, _key, tunnel?.Host, tunnel?.Port)) { KeepAliveInterval = SshConnector.KeepAlive };
-        var hostKeyError = SshConnector.HookHostKey(client, _server, _check, null);
+        SshClient? client = null;
+        Func<string?>? hostKeyError = null;
         try
         {
+            client = new SshClient(SshConnector.BuildConnectionInfo(_server, _key, tunnel?.Host, tunnel?.Port)) { KeepAliveInterval = SshConnector.KeepAlive };
+            hostKeyError = SshConnector.HookHostKey(client, _server, _check, null);
             await Task.Run(() => client.Connect());
+        }
+        catch (SshConnectException)
+        {
+            client?.Dispose();
+            tunnel?.Dispose();
+            throw;
         }
         catch (Exception ex)
         {
-            client.Dispose();
+            client?.Dispose();
             tunnel?.Dispose();
-            throw new SshConnectException(hostKeyError() ?? SshConnector.Describe(ex), ex);
+            throw new SshConnectException(hostKeyError?.Invoke() ?? SshConnector.Describe(ex), ex);
         }
         _tunnel = tunnel;
 
