@@ -62,14 +62,18 @@ internal sealed class LinuxPlatform : IHostPlatform
 
     public void OpenExternalRdp(ServerEntry server)
     {
-        var target = $"{server.Host}:{server.Port}";
+        var host = (server.Host ?? "").Trim();
+        if (host.Length == 0 || host.IndexOfAny(new[] { ' ', '\t', '\r', '\n', '"', '\'', '/', '\\' }) >= 0)
+            throw new InvalidOperationException("Invalid RDP host name.");
+        var port = server.Port is > 0 and <= 65535 ? server.Port : 3389;
+        var target = $"{host}:{port}";
         foreach (var exe in new[] { "xfreerdp3", "xfreerdp", "wlfreerdp" })
             if (Which(exe) != null)
             {
                 var info = new ProcessStartInfo(exe) { UseShellExecute = false };
                 info.ArgumentList.Add("/v:" + target);
                 if (server.Username.Length > 0) info.ArgumentList.Add("/u:" + server.Username);
-                info.ArgumentList.Add("/cert:ignore");
+                info.ArgumentList.Add("/cert:tofu");
                 info.ArgumentList.Add("/dynamic-resolution");
                 Process.Start(info);
                 return;

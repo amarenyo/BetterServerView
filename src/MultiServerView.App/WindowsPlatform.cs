@@ -60,8 +60,16 @@ internal sealed class WindowsPlatform : IHostPlatform
         }
     }
 
-    public void OpenExternalRdp(ServerEntry server) =>
-        Process.Start(new ProcessStartInfo("mstsc.exe", $"/v:{server.Host}:{server.Port}") { UseShellExecute = true });
+    public void OpenExternalRdp(ServerEntry server)
+    {
+        var host = (server.Host ?? "").Trim();
+        if (host.Length == 0 || host.IndexOfAny(new[] { ' ', '\t', '\r', '\n', '"', '\'', '/', '\\' }) >= 0)
+            throw new InvalidOperationException("Invalid RDP host name.");
+        var port = server.Port is > 0 and <= 65535 ? server.Port : 3389;
+        var info = new ProcessStartInfo("mstsc.exe") { UseShellExecute = false };
+        info.ArgumentList.Add($"/v:{host}:{port}");
+        Process.Start(info);
+    }
 
     public void StartTeamViewer(string id, string password)
     {
