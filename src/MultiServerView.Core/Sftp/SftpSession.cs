@@ -181,11 +181,51 @@ public sealed class SftpSession : IDisposable
         progress(new TransferProgress(name, total, total, true));
     }
 
+    /// <summary>
+    /// Combines <paramref name="localDir"/> and a single remote entry name and verifies the resulting path stays
+    /// strictly inside <paramref name="localDir"/> (blocks traversal, path separators and rooted names).
+    /// </summary>
+    public static string SafeLocalChildPath(string localDir, string entryName)
+    {
+        if (string.IsNullOrWhiteSpace(entryName) || entryName is "." or ".."
+            || entryName.IndexOfAny(new[] { '/', '\\', '\0', ':' }) >= 0)
+            throw new InvalidOperationException("Unsafe remote file name: " + entryName);
+
+        var fullRoot = Path.GetFullPath(localDir);
+        var rootWithSep = fullRoot.EndsWith(Path.DirectorySeparatorChar)
+            ? fullRoot
+            : fullRoot + Path.DirectorySeparatorChar;
+        var fullTarget = Path.GetFullPath(Path.Combine(fullRoot, entryName));
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (!fullTarget.StartsWith(rootWithSep, comparison))
+            throw new InvalidOperationException("Unsafe remote file name: " + entryName);
+        return fullTarget;
+    }
+
+    private static readonly HashSet<string> BlockedExternalExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".exe", ".com", ".bat", ".cmd", ".msi", ".msp", ".msu",
+        ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".ps1", ".psm1", ".psd1",
+        ".scr", ".pif", ".lnk", ".hta", ".cpl", ".msc", ".reg", ".inf",
+        ".jar", ".dll", ".sys", ".appimage", ".desktop"
+    };
+
+    /// <summary>
+    /// True if opening <paramref name="fileName"/> with the OS default handler (ShellExecute / xdg-open)
+    /// could execute remote code instead of opening a text editor.
+    /// </summary>
+    public static bool IsBlockedExternalExtension(string fileName)
+    {
+        var ext = Path.GetExtension(fileName);
+        return !string.IsNullOrEmpty(ext) && BlockedExternalExtensions.Contains(ext);
+    }
+
     /// <summary>Downloads a file or a whole folder (recursively) into the local folder <paramref name="localDir"/>.</summary>
     public async Task DownloadAsync(string remotePath, string localDir, Action<TransferProgress> progress, CancellationToken ct)
     {
         var client = Client;
         var name = remotePath.TrimEnd('/').Split('/').Last();
+        var rootLocal = SafeLocalChildPath(localDir, name);
 
         var (files, dirs) = await Task.Run(() =>
         {
@@ -194,11 +234,10 @@ public sealed class SftpSession : IDisposable
             var d = new List<string>();
             if (attrs.IsDirectory)
             {
-                var rootLocal = Path.Combine(localDir, name);
                 d.Add(rootLocal);
                 CollectRemote(client, remotePath, rootLocal, f, d);
             }
-            else f.Add((remotePath, Path.Combine(localDir, name), attrs.Size));
+            else f.Add((remotePath, rootLocal, attrs.Size));
             foreach (var dir in d) Directory.CreateDirectory(dir);
             return (f, d);
         }, ct);
@@ -219,25 +258,28 @@ public sealed class SftpSession : IDisposable
     }
 
     private static void CollectRemote(SftpClient client, string remoteDir, string localDir,
-        List<(string, string, long)> files, List<string> dirs)
+        List<(string, string, long)> files, List<string> dirs, int depth = 0)
     {
+        if (depth > 64) return; // protects against link loops
         foreach (var f in client.ListDirectory(remoteDir))
         {
             if (f.Name is "." or "..") continue;
-            var local = Path.Combine(localDir, f.Name);
+            if (f.IsSymbolicLink) continue;
+            var local = SafeLocalChildPath(localDir, f.Name);
             if (f.IsDirectory)
             {
                 dirs.Add(local);
-                CollectRemote(client, f.FullName, local, files, dirs);
+                CollectRemote(client, f.FullName, local, files, dirs, depth + 1);
             }
             else files.Add((f.FullName, local, f.Length));
         }
     }
 
-    private static void DeleteRecursive(SftpClient client, string path)
+    private static void DeleteRecursive(SftpClient client, string path, int depth = 0)
     {
-        var attrs = client.GetAttributes(path);
-        if (!attrs.IsDirectory)
+        if (depth > 64) throw new InvalidOperationException("Folder nesting is too deep to delete safely.");
+        var item = client.Get(path);
+        if (!item.IsDirectory || item.IsSymbolicLink)
         {
             client.DeleteFile(path);
             return;
@@ -245,7 +287,7 @@ public sealed class SftpSession : IDisposable
         foreach (var f in client.ListDirectory(path))
         {
             if (f.Name is "." or "..") continue;
-            if (f.IsDirectory) DeleteRecursive(client, f.FullName);
+            if (f.IsDirectory && !f.IsSymbolicLink) DeleteRecursive(client, f.FullName, depth + 1);
             else client.DeleteFile(f.FullName);
         }
         client.DeleteDirectory(path);

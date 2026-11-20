@@ -960,11 +960,13 @@ public sealed class Bridge : IDisposable
     /// </summary>
     private async Task OpenExternalAsync(string sessionId, SftpSession session, string remotePath)
     {
+        var name = remotePath.TrimEnd('/').Split('/').Last();
+        if (SftpSession.IsBlockedExternalExtension(name))
+            throw new InvalidOperationException($"For security reasons, \"{Path.GetExtension(name)}\" files cannot be opened with a local program. Use the built-in editor or download the file instead.");
         var dir = Path.Combine(Path.GetTempPath(), "msv-edit", Guid.NewGuid().ToString("N"));
+        var local = SftpSession.SafeLocalChildPath(dir, name);
         Directory.CreateDirectory(dir);
         await session.DownloadAsync(remotePath, dir, _ => { }, CancellationToken.None);
-        var name = remotePath.TrimEnd('/').Split('/').Last();
-        var local = Path.Combine(dir, name);
         if (!File.Exists(local)) throw new InvalidOperationException("Only files can be opened with a local program.");
         var remoteDir = SftpSession.ParentOf(remotePath);
 
