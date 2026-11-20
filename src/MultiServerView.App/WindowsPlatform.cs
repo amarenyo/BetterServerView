@@ -112,23 +112,46 @@ internal sealed class WindowsPlatform : IHostPlatform
         return list;
     }
 
+    private int _installing;
+
     public async Task InstallUpdateAsync(string setupUrl, string version)
     {
         if (!Core.Update.UpdateChecker.IsGitHubUrl(setupUrl, Core.Update.UpdateChecker.Repository))
             throw new InvalidOperationException("Refusing to download update from an untrusted URL.");
+        if (Interlocked.Exchange(ref _installing, 1) != 0)
+            throw new InvalidOperationException("An update download is already in progress.");
+
         var safeVersion = Core.Update.UpdateChecker.SanitizeVersionForFileName(version);
         var file = Path.Combine(Path.GetTempPath(), "MultiServerView-Setup-" + safeVersion + ".exe");
-        using (var response = await Http.GetAsync(setupUrl, HttpCompletionOption.ResponseHeadersRead))
+        var part = file + "." + Guid.NewGuid().ToString("N")[..8] + ".part";
+        try
         {
-            response.EnsureSuccessStatusCode();
-            var finalUrl = response.RequestMessage?.RequestUri?.ToString() ?? "";
-            if (!Core.Update.UpdateChecker.IsGitHubUrl(finalUrl, Core.Update.UpdateChecker.Repository))
-                throw new InvalidOperationException("Update download redirected to an untrusted host.");
-            await using var fs = File.Create(file);
-            await response.Content.CopyToAsync(fs);
+            using (var response = await Http.GetAsync(setupUrl, HttpCompletionOption.ResponseHeadersRead))
+            {
+                response.EnsureSuccessStatusCode();
+                var finalUrl = response.RequestMessage?.RequestUri?.ToString() ?? "";
+                if (!Core.Update.UpdateChecker.IsGitHubUrl(finalUrl, Core.Update.UpdateChecker.Repository))
+                    throw new InvalidOperationException("Update download redirected to an untrusted host.");
+                await using (var fs = File.Create(part))
+                {
+                    await response.Content.CopyToAsync(fs);
+                }
+                if (response.Content.Headers.ContentLength is { } expected && new FileInfo(part).Length != expected)
+                    throw new IOException("The update download was incomplete. Please try again.");
+            }
+            File.Move(part, file, overwrite: true);
+            // Inno Setup: silent, closes this app, starts the new version when done (/relaunch=1 triggers the silent [Run] entry).
+            Process.Start(new ProcessStartInfo(file, "/SILENT /CLOSEAPPLICATIONS /NOCANCEL /relaunch=1") { UseShellExecute = true });
+            _window("close");
         }
-        // Inno Setup: silent, closes this app, starts the new version when done (/relaunch=1 triggers the silent [Run] entry).
-        Process.Start(new ProcessStartInfo(file, "/SILENT /CLOSEAPPLICATIONS /NOCANCEL /relaunch=1") { UseShellExecute = true });
-        _window("close");
+        catch
+        {
+            try { if (File.Exists(part)) File.Delete(part); } catch { /* ignore cleanup errors */ }
+            throw;
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _installing, 0);
+        }
     }
 }
