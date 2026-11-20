@@ -63,6 +63,7 @@ public sealed class SourceService
     private readonly SyncSettingsStore _settings;
     private readonly Func<SyncSettings, SupabaseClient> _clientFactory;
     private readonly SemaphoreSlim _lock = new(1, 1);
+    private long _dirtyGen;
     private SourceStatus _status;
 
     private static readonly HttpClient GistHttp = new() { Timeout = TimeSpan.FromSeconds(30) };
