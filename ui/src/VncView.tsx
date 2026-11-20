@@ -61,15 +61,20 @@ export function VncView({
         rfbRef.current = rfb;
 
         rfb.addEventListener('connect', () => {
+          if (cancelled) return;
           setStatus('connected');
           if (activeRef.current) rfb?.focus();
         });
         rfb.addEventListener('disconnect', (e) => {
+          if (cancelled) return;
           const clean = (e as CustomEvent<{ clean: boolean }>).detail?.clean;
           setStatus(clean ? 'closed' : 'error', clean ? '' : 'Connection interrupted or refused.');
         });
-        rfb.addEventListener('credentialsrequired', () => setNeedsPassword(true));
+        rfb.addEventListener('credentialsrequired', () => {
+          if (!cancelled) setNeedsPassword(true);
+        });
         rfb.addEventListener('securityfailure', (e) => {
+          if (cancelled) return;
           const reason = (e as CustomEvent<{ reason?: string }>).detail?.reason;
           setStatus('error', 'Authentication failed' + (reason ? `: ${reason}` : '.'));
         });
