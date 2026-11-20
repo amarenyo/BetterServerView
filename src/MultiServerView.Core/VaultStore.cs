@@ -286,9 +286,12 @@ public sealed class VaultStore
             foreach (var entry in entries)
             {
                 if (string.IsNullOrWhiteSpace(entry.Id)) entry.Id = Guid.NewGuid().ToString("N");
-                if (entry.Port <= 0) entry.Port = ServerEntry.DefaultPort(entry.Protocol);
+                if (entry.Port is <= 0 or > 65535) entry.Port = ServerEntry.DefaultPort(entry.Protocol);
                 entry.UpdatedAt = DateTimeOffset.UtcNow;
-                data.Servers.Add(entry);
+                var idx = data.Servers.FindIndex(s => s.Id == entry.Id);
+                if (idx >= 0) data.Servers[idx] = entry;
+                else data.Servers.Add(entry);
+                data.Tombstones.Remove(entry.Id);
                 count++;
             }
             Save();

@@ -901,6 +901,11 @@ public sealed class Bridge : IDisposable
                 try
                 {
                     var path = Environment.ExpandEnvironmentVariables(file.StartsWith("~") ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), file[1..].TrimStart('/', (char)92)) : file);
+                    if (path.StartsWith(@"\\", StringComparison.Ordinal) || path.StartsWith("//", StringComparison.Ordinal))
+                    {
+                        keysSkipped++;
+                        continue;
+                    }
                     if (!byFile.TryGetValue(path, out var key))
                     {
                         var text = File.ReadAllText(path);
