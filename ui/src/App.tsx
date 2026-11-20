@@ -5,6 +5,7 @@ import { Unlock } from './Unlock';
 import { CommandPalette, type PaletteAction } from './CommandPalette';
 import { HostPanel } from './HostPanel';
 import { PromptDialog } from './Prompt';
+import { clearLastValues } from './snippetVars';
 import { offerUpdate } from './updates';
 import { SessionCloseContext } from './SessionFrame';
 import { Keychain } from './Keychain';
@@ -375,6 +376,7 @@ export function App() {
   const lastActivity = useRef(Date.now());
   useEffect(() => {
     if (phase !== 'ready') return;
+    lastActivity.current = Date.now();
     const touch = () => (lastActivity.current = Date.now());
     const events = ['mousemove', 'mousedown', 'keydown', 'wheel', 'touchstart'] as const;
     events.forEach((e) => window.addEventListener(e, touch, true));
@@ -483,6 +485,7 @@ export function App() {
     setActive(HOME);
     setWorkspace('');
     rememberWorkspaces([]);
+    clearLastValues();
     await refresh();
   }
 
