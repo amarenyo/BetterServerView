@@ -114,7 +114,7 @@ internal sealed class WindowsPlatform : IHostPlatform
 
     private int _installing;
 
-    public async Task InstallUpdateAsync(string setupUrl, string version)
+    public async Task InstallUpdateAsync(string setupUrl, string version, string? expectedSha256 = null)
     {
         if (!Core.Update.UpdateChecker.IsGitHubUrl(setupUrl, Core.Update.UpdateChecker.Repository))
             throw new InvalidOperationException("Refusing to download update from an untrusted URL.");
@@ -138,6 +138,13 @@ internal sealed class WindowsPlatform : IHostPlatform
                 }
                 if (response.Content.Headers.ContentLength is { } expected && new FileInfo(part).Length != expected)
                     throw new IOException("The update download was incomplete. Please try again.");
+            }
+            if (!string.IsNullOrEmpty(expectedSha256))
+            {
+                await using var checkStream = File.OpenRead(part);
+                var actual = Convert.ToHexString(await System.Security.Cryptography.SHA256.HashDataAsync(checkStream));
+                if (!actual.Equals(expectedSha256, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("The downloaded update failed SHA-256 verification.");
             }
             File.Move(part, file, overwrite: true);
             // Inno Setup: silent, closes this app, starts the new version when done (/relaunch=1 triggers the silent [Run] entry).
